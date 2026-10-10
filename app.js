@@ -1277,9 +1277,9 @@ ${chars.text.slice(0, 6000)}`;
     LS.del(KEY_LS); MODELS.list = null; $("#keyIn").value = ""; renderShelf(); openSettings("金鑰刪掉了");
   };
   $("#setSave").onclick = () => {
-    const k = $("#keyIn").value.trim();
+    const k = $("#keyIn").value.replace(/\s+/g, "");
     const oldKey = storedKey();
-    if (k && !/^[A-Za-z0-9_\-]{20,}$/.test(k)) { $("#setMsg").textContent = "這串看起來不像金鑰（應該是 AIza 開頭的一長串英數字），再檢查一次"; $("#setMsg").hidden = false; return; }
+    if (k && !/^[A-Za-z0-9_.\-]{20,}$/.test(k)) { $("#setMsg").textContent = "這串看起來不像金鑰（應該是 AQ. 或 AIza 開頭的一長串英數字，中間不能有空格），再檢查一次"; $("#setMsg").hidden = false; return; }
     if (k) { try { localStorage.setItem(KEY_LS, k); } catch { toast("存不進去：這個瀏覽器不讓網頁存資料（例如無痕模式）"); return; } }
     if (k !== oldKey) MODELS.list = null;
     const voiceChanged = voiceSel.value !== prefs.voice, speedChanged = +$("#speedSel").value !== +prefs.silence;
