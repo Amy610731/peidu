@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-Hant-TW" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>陪讀手機版</title>
+<meta name="description" content="iPAS 陪讀：手機上讀講義、跟 AI 老師即時語音討論，老師邊聊邊畫重點。">
+<meta name="theme-color" content="#0d1320">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="陪讀">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/icon180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <!-- ========== 書架 ========== -->
+  <section id="shelf" class="view" aria-label="書架">
+    <div class="shelf-in">
+      <header class="shelf-head">
+        <h1 class="brand"><span class="mk">陪讀</span>手機版</h1>
+        <button id="shelfSettings" class="icon-btn" type="button" aria-label="設定">⚙️</button>
+      </header>
+      <p class="lede">選一份講義，按下面的大麥克風就能跟老師用說的討論；老師講到重點會自己幫你畫螢光筆。</p>
+      <div class="shelf-actions">
+        <button id="addBtn" class="btn primary big" type="button">＋ 加入 PDF 講義</button>
+        <input id="addFile" type="file" accept="application/pdf,.pdf" hidden>
+      </div>
+      <div id="uploading" class="uploading" hidden><span class="spinner"></span><span id="uploadingText">正在加入…</span></div>
+      <p id="keyNote" class="note-line" hidden>還沒設定 Gemini 金鑰：讀講義、畫重點可以先用；要語音討論請按右上角 ⚙️ 貼上金鑰。</p>
+      <p id="shelfLabel" class="shelf-label" hidden>我的講義</p>
+      <ul id="docList" class="doclist" hidden></ul>
+      <div id="shelfEmpty" class="empty">
+        <h2>書架還是空的</h2>
+        <ol>
+          <li>按「＋ 加入 PDF 講義」，從「檔案」App 選一份講義。</li>
+          <li>打開講義，按下面的 🎙️「開始陪讀」，直接說話問老師。</li>
+          <li>學完按右上角 ⋯ →「學完做學習卡」，存到 iCloud 或傳 LINE，回電腦放進 Obsidian。</li>
+        </ol>
+      </div>
+      <p class="shelf-foot">講義和筆記只存在這支手機的瀏覽器裡（不會上傳）。建議用 Safari 的「分享 → 加入主畫面」，之後從主畫面打開，資料比較不會被 Safari 自動清掉。注意：主畫面版和 Safari 分頁版的書架是分開的。</p>
+    </div>
+  </section>
+
+  <!-- ========== 閱讀器 ========== -->
+  <section id="reader" class="view" aria-label="閱讀器" hidden>
+    <header class="rtop">
+      <button id="backBtn" class="back" type="button" aria-label="回書架">‹</button>
+      <span id="docName" class="rtitle"></span>
+      <label class="pager" for="pageIn"><input id="pageIn" type="number" inputmode="numeric" min="1" value="1" enterkeyhint="go" aria-label="頁碼"><span id="pageTotal">/ 0</span></label>
+      <button id="moreBtn" class="icon-btn" type="button" aria-label="更多功能">⋯</button>
+    </header>
+
+    <main id="viewer">
+      <div id="boxBanner" class="box-banner" hidden>在頁面上拖一個框，把想問的地方框起來 <button type="button" id="boxCancel" class="link light">取消</button></div>
+      <div id="pages"></div>
+      <div id="viewerMsg" class="viewer-msg" hidden><div><span class="spinner" id="viewerSpin"></span><span id="viewerMsgText"></span></div></div>
+    </main>
+    <div class="zoom" role="group" aria-label="縮放">
+      <button type="button" id="zoomIn" aria-label="放大">＋</button>
+      <button type="button" id="zoomOut" aria-label="縮小">－</button>
+    </div>
+
+    <aside id="side" aria-label="筆記與對話">
+      <div id="sheetHandle" class="sheet-handle" role="button" tabindex="0" aria-label="拖曳調整高度，點一下收起"><span></span></div>
+      <nav class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="chat" aria-selected="true">💬 對話</button>
+        <button type="button" role="tab" data-tab="page" aria-selected="false">本頁筆記<span class="count" id="cntPage"></span></button>
+        <button type="button" role="tab" data-tab="all" aria-selected="false">全部<span class="count" id="cntAll"></span></button>
+        <button type="button" id="sheetClose" class="tab-close" aria-label="收起">✕</button>
+      </nav>
+      <div id="sideBody" class="side-body"></div>
+
+      <form id="composer" class="composer" hidden>
+        <div class="comp-head"><span id="compTag" class="tag k-question">提問</span><button type="button" id="compCancel" class="link">取消</button></div>
+        <p id="compQuote" class="comp-quote"></p>
+        <textarea id="compText" rows="3" enterkeyhint="enter"></textarea>
+        <div class="comp-actions">
+          <button type="button" id="compSave" class="btn ghost">只記下來</button>
+          <button type="submit" id="compAsk" class="btn primary">問老師</button>
+        </div>
+      </form>
+
+      <form id="chatBox" class="chatbox">
+        <div class="chat-row">
+          <textarea id="chatIn" rows="1" placeholder="打字問老師（老師會用說的回答）" enterkeyhint="send" aria-label="打字問老師"></textarea>
+          <button type="submit" id="sendBtn" class="btn primary">送出</button>
+        </div>
+      </form>
+    </aside>
+
+    <!-- 下方：字幕＋大麥克風 -->
+    <footer id="dock" class="dock">
+      <button type="button" id="caption" class="caption" hidden aria-label="字幕，點一下看完整對話">
+        <span id="capAmy" class="cap-amy"></span>
+        <span id="capTeacher" class="cap-t"></span>
+      </button>
+      <div class="dock-row">
+        <button type="button" id="notesBtn" class="side-btn" aria-pressed="false"><span class="ico">📋</span><span>筆記對話</span></button>
+        <button type="button" id="micBtn" class="mic" data-st="off" aria-label="開始陪讀">
+          <span class="mic-ring" aria-hidden="true"></span>
+          <span class="mic-ico" id="micIco" aria-hidden="true">🎙️</span>
+          <span class="mic-text"><b id="micLabel">開始陪讀</b><small id="micSub">按一下，直接用說的問老師</small></span>
+        </button>
+        <button type="button" id="muteBtn" class="side-btn" aria-pressed="false" disabled><span class="ico" id="muteIco">🎤</span><span id="muteLabel">靜音</span></button>
+      </div>
+    </footer>
+  </section>
+</div>
+
+<!-- 選字工具列 -->
+<div id="selbar" class="selbar" role="toolbar" aria-label="把選取的文字標起來" hidden>
+  <button type="button" data-kind="key"><i class="sw k-key"></i>重點</button>
+  <button type="button" data-kind="confuse"><i class="sw k-confuse"></i>易混</button>
+  <button type="button" data-kind="extra"><i class="sw k-extra"></i>補充</button>
+  <button type="button" data-kind="question"><i class="sw k-question"></i>提問</button>
+  <button type="button" data-kind="note"><i class="sw k-note"></i>筆記</button>
+</div>
+
+<!-- 框選後的快速問題 -->
+<div id="regionPop" class="pop" role="dialog" aria-label="框選提問" hidden>
+  <p class="pop-hint">想問框起來的這塊什麼？</p>
+  <div class="pop-grid">
+    <button type="button" data-q="這題怎麼解？">這題怎麼解？</button>
+    <button type="button" data-q="解釋這段">解釋這段</button>
+    <button type="button" data-q="這是什麼意思？">這是什麼意思？</button>
+    <button type="button" data-q="考點是什麼？">考點是什麼？</button>
+    <button type="button" data-act="type">✏️ 自己打</button>
+    <button type="button" data-act="cancel">取消</button>
+  </div>
+</div>
+
+<!-- 更多 -->
+<div id="moreBox" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-label="更多功能">
+    <h2>更多功能</h2>
+    <div class="menu">
+      <button type="button" id="boxBtn" class="btn menu-btn">⬚ 框起題目問老師</button>
+      <button type="button" id="mmBtn" class="btn menu-btn">🧠 心智圖（整理討論重點）</button>
+      <button type="button" id="hlBtn" class="btn menu-btn">✨ 請老師畫這頁重點</button>
+      <button type="button" id="exportBtn" class="btn marker menu-btn">🗂 學完做學習卡（存到 Obsidian）</button>
+      <button type="button" id="settingsBtn" class="btn menu-btn">⚙️ 設定（金鑰、聲音、反應速度）</button>
+      <button type="button" id="moreShelf" class="btn menu-btn">‹ 回書架</button>
+    </div>
+    <div class="modal-acts"><button type="button" id="moreClose" class="btn primary">關閉</button></div>
+  </div>
+</div>
+
+<!-- 設定 -->
+<div id="setBox" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-labelledby="setTitle">
+    <h2 id="setTitle">設定</h2>
+    <p id="setMsg" class="note-line" hidden></p>
+    <section class="set-group">
+      <p class="set-title">GEMINI 金鑰（語音討論、心智圖要用）</p>
+      <div class="key-row">
+        <input id="keyIn" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="貼上 AIza 開頭的金鑰" aria-label="Gemini 金鑰">
+        <button type="button" id="keyShow" class="btn ghost small-btn">顯示</button>
+      </div>
+      <p class="small strong">🔒 金鑰只存在這支手機（這個瀏覽器）裡，不會上傳到任何地方，也不會出現在網站程式裡。</p>
+      <p id="keyState" class="small"></p>
+      <details class="howto">
+        <summary>怎麼拿到免費金鑰？</summary>
+        <ol>
+          <li>用瀏覽器打開 <b>aistudio.google.com</b>，用 Google 帳號登入。</li>
+          <li>點左邊或右上角的「Get API key」（取得 API 金鑰）。</li>
+          <li>按「Create API key」（建立金鑰），複製那串 AIza 開頭的字。</li>
+          <li>回到這裡貼上，按「存起來」。</li>
+        </ol>
+        <p class="small">免費金鑰每天有用量上限；語音額度用完時，這裡會自動換下一個語音模型。</p>
+      </details>
+    </section>
+    <section class="set-group">
+      <p class="set-title">老師的聲音</p>
+      <div class="set-row"><select id="voiceSel" aria-label="老師的聲音"></select></div>
+    </section>
+    <section class="set-group">
+      <p class="set-title">反應速度（你講完停多久，老師才開口）</p>
+      <div class="set-row">
+        <select id="speedSel" aria-label="反應速度">
+          <option value="500">快：停 0.5 秒（預設）</option>
+          <option value="800">中：停 0.8 秒</option>
+          <option value="1200">慢：停 1.2 秒（講話常停頓的時候）</option>
+        </select>
+      </div>
+    </section>
+    <div class="modal-acts">
+      <button type="button" id="keyClear" class="btn ghost">刪除金鑰</button>
+      <button type="button" id="setClose" class="btn ghost">取消</button>
+      <button type="button" id="setSave" class="btn primary">存起來</button>
+    </div>
+  </div>
+</div>
+
+<!-- 確認 -->
+<div id="confirmBox" class="modal" hidden>
+  <div class="modal-card" role="alertdialog" aria-labelledby="cfTitle">
+    <h2 id="cfTitle"></h2>
+    <p id="cfBody"></p>
+    <div class="modal-acts"><button type="button" id="cfCancel" class="btn ghost">先不要</button><button type="button" id="cfOk" class="btn danger">刪除</button></div>
+  </div>
+</div>
+
+<!-- 學習卡／匯出 -->
+<div id="exportBox" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-labelledby="exTitle">
+    <h2 id="exTitle">學習卡做好了</h2>
+    <p id="exStatus"></p>
+    <img id="exImg" class="ex-img" alt="心智圖圖片" hidden>
+    <details class="md-box" id="exDetails"><summary>看內容</summary><textarea id="exText" readonly aria-label="markdown 內容"></textarea></details>
+    <div class="modal-acts">
+      <button type="button" id="exCopy" class="btn ghost">複製</button>
+      <button type="button" id="exClose" class="btn ghost">關閉</button>
+      <button type="button" id="exShare" class="btn primary">分享／存檔</button>
+    </div>
+  </div>
+</div>
+
+<!-- 彩色心智圖 -->
+<div id="mmOverlay" role="dialog" aria-label="心智圖" hidden>
+  <div class="mmbar">
+    <b>🧠 心智圖</b>
+    <select id="mmScope" aria-label="要整理哪些內容">
+      <option value="doc">整份講義</option>
+      <option value="page">只整理這頁</option>
+    </select>
+    <button type="button" id="mmGen" class="btn">🔄 重新整理</button>
+    <button type="button" id="mmFit" class="btn">⤢ 置中</button>
+    <button type="button" id="mmPng" class="btn">⬇ 存圖</button>
+    <button type="button" id="mmCopy" class="btn">📋 大綱</button>
+    <span class="spacer"></span>
+    <button type="button" id="mmClose" class="btn primary">關閉</button>
+  </div>
+  <div id="mmStage"></div>
+  <div id="mmInfo" hidden></div>
+  <div id="mmMsg" hidden></div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="mindmap.js"></script>
+<script src="live.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
