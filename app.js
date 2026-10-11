@@ -31,10 +31,8 @@
   // tutor_prompt.txt
   const TUTOR = `你是 iPAS 證照的陪讀夥伴。對方正在準備「AI 應用規劃師中級」和「資訊安全工程師初級」，一邊讀講義一邊問你。她不是工程師，但 AI 概念有中級考生的程度。
 
-說話風格：像坐在旁邊一起讀書的朋友聊天，自然、口語、輕鬆，但內容只講重點。句子不要用「喔」「啦」「欸」「呢」「囉」這類語助詞結尾。
-
 規則（回答會被語音念出來）：
-- 直接講重點，預設 1 到 3 句、100 字以內。她說「詳細一點」才講長。
+- 直接講重點，預設 2 到 4 句、120 字以內。她說「詳細一點」才講長。
 - 不叫她的名字，不寒暄、不說「好問題」「沒問題」這類客套，不重複她的問題。
 - 結尾不要硬塞反問或「要不要繼續」。只有她說「考我」「出題」時才出題。
 - 用繁體中文、台灣用語。
@@ -48,7 +46,7 @@
   // server.py 的 LIVE_RULES（手機版沒有 server：lookup 只能查維基百科）
   const LIVE_RULES = `你現在是用「即時語音」回答學生：
 - 用台灣華語的口音和台灣常用詞（例如：影片、軟體、網路、資訊、品質）。
-- 像朋友聊天一樣自然口語，但只講重點，講完就停（1 到 3 句）。句子不要用「喔」「啦」「欸」「呢」「囉」結尾。不叫她的名字、不寒暄、結尾不硬塞反問。她插話時馬上停下來聽。
+- 照下面「說話個性」講話，講完就停。不叫她的名字、不寒暄、結尾不硬塞反問。她插話時馬上停下來聽。
 - 不要念出標點、符號或格式；英文縮寫照念（例如 C I A、ISO 兩萬七千零一）。
 - 她問「這題」「這段」通常是指她現在這一頁，或她剛框起來傳給你的內容。
 - 講義以外的觀念問題照樣用你的知識回答。
@@ -56,6 +54,18 @@
 - 考試日期、報名、費用、最新消息這類 iPAS 官網資訊，手機版查不到，直接說「我查不到，建議看官網」。絕對不要編日期或數字，沒查過就不要說「我查了一下」。
 - 你有一個 highlight 螢光筆工具：討論到講義上的考點、正確選項、關鍵定義或容易混淆的地方時，邊回答邊呼叫 highlight 把那句原文標起來（text 必須從下面的講義內容逐字複製，一次討論標 1 到 3 個就好，不要整頁亂標）。標完不用特別講「我幫你標了」，繼續講重點就好。
 - 收到「（這則不用回應…）」開頭的訊息時，不要出聲回應。`;
+
+  // 老師的說話個性（設定裡可以換）；內容規則都一樣，只差語氣
+  const PERSONAS = {
+    tsundere: { label: "傲嬌小戲精（活潑可愛）", text: `說話個性：你是活潑可愛、有點傲嬌的小戲精學伴。
+- 語氣誇張、有戲、表情豐富，像在演小劇場：會假裝嫌棄、吐槽、碎念，但其實很認真在教她。例如「哼，這題這麼簡單也要問我？算了，看在你這麼認真的份上，聽好」「天啊，這個陷阱超多人踩，你可別跟著跳下去」。
+- 她答對或誇你的時候，會害羞地嘴硬，例如「哼，才不是特別為你整理的，剛好而已」。
+- 嫌棄要可愛、像朋友鬥嘴，絕對不能真的貶低她或讓她難過；她說聽不懂、很累、很焦慮時，收起毒舌，溫柔地鼓勵。
+- 可以用「哼」「嘖嘖」「天啊」「欸嘿」開頭吐槽或撒嬌，但句子結尾不要用「喔」「啦」「欸」「呢」「囉」。
+- 解說一定要簡單易懂：先用一句白話講結論，再用生活化的比喻（像在跟國中生解釋），專有名詞要翻成白話。戲精只是調味，內容要正確，不能為了搞笑講錯或講太長。` },
+    calm: { label: "冷靜重點（朋友聊天）", text: `說話個性：像坐在旁邊一起讀書的朋友聊天，自然、口語、輕鬆，但內容只講重點，1 到 3 句就停。句子不要用「喔」「啦」「欸」「呢」「囉」這類語助詞結尾。解說要簡單易懂，專有名詞順便講白話。` },
+  };
+  const personaText = () => (PERSONAS[prefs.persona] || PERSONAS.tsundere).text;
 
   const MINDMAP_PROMPT = `把下面的學習內容整理成一張「中文心智圖」的結構，給 iPAS 考生複習用。
 
@@ -94,7 +104,7 @@
     del(k) { try { localStorage.removeItem(k); } catch {} },
   };
   const KEY_LS = "peidu-phone-gemini-key";
-  const prefs = Object.assign({ voice: "Kore", silence: 500 }, LS.get("peidu-phone-prefs", {}));
+  const prefs = Object.assign({ voice: "Kore", silence: 500, persona: "tsundere" }, LS.get("peidu-phone-prefs", {}));
   if (![500, 800, 1200].includes(+prefs.silence)) prefs.silence = 500;
   const savePrefs = () => LS.set("peidu-phone-prefs", prefs);
 
@@ -103,6 +113,29 @@
     const t = $("#toast"); t.textContent = msg; t.hidden = false;
     clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, ms);
   }
+  // 老師自動畫的重點：下方跳出「復原」，連續標了好幾個就一個一個往回復原
+  const UNDO = { stack: [], t: 0 };
+  function showUndo(ann) {
+    UNDO.stack.push(ann);
+    paintUndo();
+  }
+  function paintUndo() {
+    const bar = $("#undoBar");
+    clearTimeout(UNDO.t);
+    const last = UNDO.stack[UNDO.stack.length - 1];
+    if (!last) { bar.hidden = true; return; }
+    $("#undoText").textContent = `🖍 老師標了：${last.text.slice(0, 18)}${last.text.length > 18 ? "…" : ""}` + (UNDO.stack.length > 1 ? `（共 ${UNDO.stack.length} 個）` : "");
+    bar.hidden = false;
+    UNDO.t = setTimeout(() => { bar.hidden = true; UNDO.stack = []; }, 20000);
+  }
+  $("#undoBtn").onclick = async () => {
+    const last = UNDO.stack.pop();
+    if (!last) return paintUndo();
+    try { await store.deleteAnn(last.id); toast("復原了：這個重點拿掉了"); } catch (err) { writeErr(err); }
+    paintUndo();
+  };
+  $("#undoClose").onclick = () => { clearTimeout(UNDO.t); UNDO.stack = []; $("#undoBar").hidden = true; };
+
   function askConfirm(title, body, okLabel = "刪除") {
     return new Promise(resolve => {
       $("#cfTitle").textContent = title; $("#cfBody").textContent = body; $("#cfOk").textContent = okLabel;
@@ -911,7 +944,7 @@
     }, 100);
   }
   function liveSystem(pg, text) {
-    return [LIVE_RULES, TUTOR, `=== 學生正在讀《${stem(S.doc ? S.doc.name : "")}》第 ${pg} 頁，這頁內容 ===\n${(text || "").trim() || "（抓不到文字）"}`].join("\n\n");
+    return [LIVE_RULES, TUTOR, personaText(), `=== 學生正在讀《${stem(S.doc ? S.doc.name : "")}》第 ${pg} 頁，這頁內容 ===\n${(text || "").trim() || "（抓不到文字）"}`].join("\n\n");
   }
   // 按麥克風／問老師之前呼叫：沒開就開（要在點擊事件裡、await 之前呼叫）
   function ensureLive() {
@@ -984,8 +1017,8 @@
           const rects = findRects(chars, t) || findRects(chars, t, true);
           if (!rects || !rects.length) continue;
           if (S.anns.some(a => a.page === pg && a.author === "claude" && a.text === t)) return `這段在第 ${pg} 頁已經標過了`;
-          await store.addAnn({ page: pg, kind, text: t, rects, note: String(note || "").trim(), author: "claude" });
-          toast(`🖍 老師標了：${t.slice(0, 22)}${t.length > 22 ? "…" : ""}`);
+          const ann = await store.addAnn({ page: pg, kind, text: t, rects, note: String(note || "").trim(), author: "claude" });
+          showUndo(ann);
           return `已經標在第 ${pg} 頁`;
         }
         return `沒標成功：第 ${base} 頁（和前後頁）找不到「${t.slice(0, 30)}」這段原文。text 必須從講義內容逐字複製，不要改字或加字。`;
@@ -1264,7 +1297,7 @@ ${chars.text.slice(0, 6000)}`;
     $("#keyIn").value = storedKey(); $("#keyIn").type = "password"; $("#keyShow").textContent = "顯示";
     $("#keyState").textContent = DEV ? "（開發測試模式：金鑰由本機測試伺服器提供，不會存進手機）"
       : storedKey() ? `已經存了一把金鑰（結尾 ${storedKey().slice(-4)}）。` : "還沒有金鑰。";
-    voiceSel.value = prefs.voice; $("#speedSel").value = String(prefs.silence);
+    voiceSel.value = prefs.voice; $("#speedSel").value = String(prefs.silence); $("#personaSel").value = PERSONAS[prefs.persona] ? prefs.persona : "tsundere";
     $("#setBox").hidden = false;
   }
   $("#keyShow").onclick = () => { const k = $("#keyIn"); const show = k.type === "password"; k.type = show ? "text" : "password"; $("#keyShow").textContent = show ? "隱藏" : "顯示"; };
@@ -1282,10 +1315,10 @@ ${chars.text.slice(0, 6000)}`;
     if (k && !/^[A-Za-z0-9_.\-]{20,}$/.test(k)) { $("#setMsg").textContent = "這串看起來不像金鑰（應該是 AQ. 或 AIza 開頭的一長串英數字，中間不能有空格），再檢查一次"; $("#setMsg").hidden = false; return; }
     if (k) { try { localStorage.setItem(KEY_LS, k); } catch { toast("存不進去：這個瀏覽器不讓網頁存資料（例如無痕模式）"); return; } }
     if (k !== oldKey) MODELS.list = null;
-    const voiceChanged = voiceSel.value !== prefs.voice, speedChanged = +$("#speedSel").value !== +prefs.silence;
-    prefs.voice = voiceSel.value; prefs.silence = +$("#speedSel").value; savePrefs();
+    const voiceChanged = voiceSel.value !== prefs.voice, speedChanged = +$("#speedSel").value !== +prefs.silence, personaChanged = $("#personaSel").value !== prefs.persona;
+    prefs.voice = voiceSel.value; prefs.silence = +$("#speedSel").value; prefs.persona = $("#personaSel").value; savePrefs();
     $("#setBox").hidden = true; renderShelf();
-    if (PeiduLive.isOn() && (voiceChanged || speedChanged || (k && k !== oldKey))) {
+    if (PeiduLive.isOn() && (voiceChanged || speedChanged || personaChanged || (k && k !== oldKey))) {
       PeiduLive.restart({ voice: prefs.voice, silenceMs: prefs.silence });
       toast("設定改好了，重新連線中");
     } else toast(k ? "存好了" : "設定存好了");

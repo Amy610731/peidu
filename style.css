@@ -308,6 +308,18 @@ details.md-box textarea { width: 100%; min-height: 200px; font: 13px/1.5 ui-mono
   background: var(--pill-bg); color: var(--pill-fg); padding: 10px 16px; border-radius: 12px; box-shadow: var(--shadow); font-size: 14.5px;
 }
 
+/* 老師自動畫重點後的「復原」列（在麥克風上方） */
+.undo-bar {
+  position: fixed; z-index: 69; left: 50%; transform: translateX(-50%);
+  top: calc(116px + var(--sat)); width: max-content; max-width: calc(100vw - 32px);
+  display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 14px;
+  background: var(--pill-bg); color: var(--pill-fg); border-radius: 14px; box-shadow: var(--shadow); font-size: 14.5px;
+}
+.undo-bar[hidden] { display: none; }
+.undo-bar span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.undo-bar button { min-height: 44px; min-width: 44px; padding: 0 12px; border: 0; border-radius: 10px; background: rgb(255 255 255 / .14); color: inherit; font-size: 15px; font-weight: 700; flex: none; }
+.undo-bar #undoClose { background: transparent; font-weight: 400; padding: 0 8px; }
+
 /* 彩色心智圖：深色夜空上的神經元（全螢幕） */
 #mmOverlay { position: fixed; inset: 0; z-index: 65; background: #070b18; display: flex; flex-direction: column; }
 #mmOverlay[hidden] { display: none; }
