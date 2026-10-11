@@ -732,6 +732,41 @@
   }
   function onAnnsChanged() { drawAllHighlights(); if (S.tab !== "chat") renderSide(); else updateCounts(); }
 
+  // 點一下螢光筆 → 小選單：看是誰標的、刪除這個重點（拖曳選字、框選、畫筆時不觸發）
+  const HLPOP = { id: null, down: null };
+  document.getElementById("pages").addEventListener("pointerdown", e => { HLPOP.down = [e.clientX, e.clientY]; }, true);
+  function hlAtPoint(x, y) {
+    const hits = [...document.querySelectorAll("#pages .hl")].filter(h => {
+      const r = h.getBoundingClientRect();
+      return x >= r.left - 3 && x <= r.right + 3 && y >= r.top - 3 && y <= r.bottom + 3;
+    });
+    return hits.length ? hits[hits.length - 1] : null;
+  }
+  function closeHlPop() { $("#hlPop").hidden = true; HLPOP.id = null; }
+  document.getElementById("pages").addEventListener("click", e => {
+    if (BOX.on || BOX.drag) return;
+    if (HLPOP.down && Math.hypot(e.clientX - HLPOP.down[0], e.clientY - HLPOP.down[1]) > 8) return;  // 拖曳／捲動，不是點
+    const sel = window.getSelection && window.getSelection();
+    if (sel && String(sel).trim()) return;  // 正在選字
+    const h = hlAtPoint(e.clientX, e.clientY);
+    if (!h) { if (!$("#hlPop").hidden) closeHlPop(); return; }
+    const a = S.anns.find(x => x.id === h.dataset.id); if (!a) return;
+    HLPOP.id = a.id;
+    const kindName = { key: "重點", confuse: "易混", extra: "補充", question: "提問", note: "筆記" }[a.kind] || "重點";
+    $("#hlPopWho").textContent = `${a.author === "claude" ? "🖍 老師標的" : "✏️ 你標的"}${kindName}・第 ${a.page} 頁`;
+    $("#hlPopText").textContent = (a.text || "").slice(0, 80) + ((a.text || "").length > 80 ? "…" : "") + (a.note ? `\n— ${a.note}` : "");
+    const pop = $("#hlPop"); pop.hidden = false;
+    const pw = pop.offsetWidth, ph = pop.offsetHeight;
+    pop.style.left = Math.max(8, Math.min(e.clientX - pw / 2, innerWidth - pw - 8)) + "px";
+    pop.style.top = (e.clientY + 16 + ph <= innerHeight - 8 ? e.clientY + 16 : Math.max(8, e.clientY - ph - 16)) + "px";
+  });
+  $("#hlPopClose").onclick = closeHlPop;
+  $("#hlPopDel").onclick = async () => {
+    const id = HLPOP.id; closeHlPop();
+    if (id) try { await store.deleteAnn(id); toast("刪掉了"); } catch (err) { writeErr(err); }
+  };
+
+
   // ================= 選字工具列 =================
   const selbar = $("#selbar");
   document.addEventListener("selectionchange", () => {

@@ -308,6 +308,18 @@ details.md-box textarea { width: 100%; min-height: 200px; font: 13px/1.5 ui-mono
   background: var(--pill-bg); color: var(--pill-fg); padding: 10px 16px; border-radius: 12px; box-shadow: var(--shadow); font-size: 14.5px;
 }
 
+.hl-pop { position: fixed; z-index: 75; width: min(300px, calc(100vw - 16px)); padding: 12px; border-radius: 14px; display: grid; gap: 8px; }
+.hl-pop[hidden] { display: none; }
+.hl-pop p { margin: 0; }
+.hl-pop-who { font-size: 13px; font-weight: 700; }
+.hl-pop-text { font-size: 14px; line-height: 1.5; white-space: pre-line; max-height: 9em; overflow: auto; }
+.hl-pop-acts { display: flex; gap: 8px; justify-content: flex-end; }
+.hl-pop-acts button { min-height: 40px; padding: 0 14px; border-radius: 10px; font-size: 14px; }
+.hl-pop { background: var(--panel); color: var(--ink); border: 1px solid var(--rule); box-shadow: var(--shadow); }
+.hl-pop-who { color: var(--ink-soft, #9fb0e8); }
+.hl-pop-acts button { min-height: 44px; border: 1px solid var(--rule); background: var(--panel-2); color: var(--ink); }
+.hl-pop-acts .hl-del { background: var(--danger); border-color: var(--danger); color: var(--danger-ink); font-weight: 700; }
+
 /* 老師自動畫重點後的「復原」列（在麥克風上方） */
 .undo-bar {
   position: fixed; z-index: 69; left: 50%; transform: translateX(-50%);
