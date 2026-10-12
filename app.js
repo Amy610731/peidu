@@ -134,6 +134,23 @@
     del(k) { try { localStorage.removeItem(k); } catch {} },
   };
   const KEY_LS = "peidu-phone-gemini-key";
+  const AZ_LS = "peidu-phone-azure";  // {key, region}：童音用的 Azure 語音金鑰，只存在這支手機
+  const azureConf = () => { const c = LS.get(AZ_LS, {}); return c && c.key && c.region ? c : null; };
+  const xmlEsc = t => String(t).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]));
+  // Azure 念一句（瀏覽器直接呼叫，Azure 允許跨網域）→ 回傳 mp3 的 ArrayBuffer
+  async function azureTts(text, v, conf) {
+    conf = conf || azureConf();
+    if (!conf) throw new Error("還沒設定 Azure 語音金鑰（⚙️ 設定）");
+    const ssml = `<speak version='1.0' xml:lang='zh-CN'><voice name='${v.azure}'><prosody rate='${v.rate >= 0 ? "+" : ""}${v.rate}%' pitch='${v.pitch >= 0 ? "+" : ""}${v.pitch}Hz'>${xmlEsc(text)}</prosody></voice></speak>`;
+    const r = await fetch(`https://${conf.region}.tts.speech.microsoft.com/cognitiveservices/v1`, {
+      method: "POST", body: ssml,
+      headers: { "Ocp-Apim-Subscription-Key": conf.key, "Content-Type": "application/ssml+xml", "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3" },
+    });
+    if (r.status === 401 || r.status === 403) throw new Error("Azure 金鑰或區域不對");
+    if (r.status === 429) throw new Error("Azure 免費額度用完了，或念太快");
+    if (!r.ok) throw new Error("Azure 語音暫時不能用（" + r.status + "）");
+    return r.arrayBuffer();
+  }
   const prefs = Object.assign({ voice: "Kore", silence: 500, persona: "tsundere" }, LS.get("peidu-phone-prefs", {}));
   if (![500, 800, 1200].includes(+prefs.silence)) prefs.silence = 500;
   const savePrefs = () => LS.set("peidu-phone-prefs", prefs);
@@ -1027,6 +1044,9 @@
     PeiduLive.start({
       voice: prefs.voice,
       silenceMs: +prefs.silence,
+      // 童音：字幕一句一句交給 Azure 念；念不出來那句會改用手機內建聲音
+      tts: (text, v) => azureTts(text, v),
+      onTtsError: err => { toast("童音念不出來：" + (err.message || err) + "，先用手機內建的聲音", 5000); S.sys.push({ text: "童音念不出來：" + (err.message || err), after: S.chat.length }); if (S.tab === "chat") renderSide(); },
       getConfig: async () => {
         const key = await getKey();
         if (!key) throw new Error("NEED_KEY");
@@ -1362,6 +1382,8 @@ ${chars.text.slice(0, 6000)}`;
     $("#keyIn").value = storedKey(); $("#keyIn").type = "password"; $("#keyShow").textContent = "顯示";
     $("#keyState").textContent = DEV ? "（開發測試模式：金鑰由本機測試伺服器提供，不會存進手機）"
       : storedKey() ? `已經存了一把金鑰（結尾 ${storedKey().slice(-4)}）。` : "還沒有金鑰。";
+    const az = azureConf(); $("#azKeyIn").value = az ? az.key : ""; $("#azRegionIn").value = az ? az.region : "";
+    $("#azState").textContent = az ? `已經存了 Azure 金鑰（區域 ${az.region}）。` : "還沒有 Azure 金鑰（不用童音就不用填）。";
     voiceSel.value = prefs.voice; $("#speedSel").value = String(prefs.silence); $("#personaSel").value = PERSONAS[prefs.persona] ? prefs.persona : "tsundere";
     $("#setBox").hidden = false;
   }
@@ -1380,6 +1402,15 @@ ${chars.text.slice(0, 6000)}`;
     if (k && !/^[A-Za-z0-9_.\-]{20,}$/.test(k)) { $("#setMsg").textContent = "這串看起來不像金鑰（應該是 AQ. 或 AIza 開頭的一長串英數字，中間不能有空格），再檢查一次"; $("#setMsg").hidden = false; return; }
     if (k) { try { localStorage.setItem(KEY_LS, k); } catch { toast("存不進去：這個瀏覽器不讓網頁存資料（例如無痕模式）"); return; } }
     if (k !== oldKey) MODELS.list = null;
+    // 童音的 Azure 金鑰：有填就存，存完背景試念一句確認能用
+    const azKey = $("#azKeyIn").value.replace(/\s+/g, ""), azRegion = $("#azRegionIn").value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    const azOld = azureConf();
+    if (azKey && azRegion && (!azOld || azOld.key !== azKey || azOld.region !== azRegion)) {
+      LS.set(AZ_LS, { key: azKey, region: azRegion });
+      azureTts("你好", { azure: "zh-CN-XiaoyiNeural", rate: 0, pitch: 0 }, { key: azKey, region: azRegion })
+        .then(() => toast("Azure 金鑰可以用 ✓ 「即時聲音」選童音就會用它", 4000))
+        .catch(err => toast("Azure 金鑰不能用：" + err.message, 6000));
+    } else if (!azKey && azOld) LS.del(AZ_LS);
     const voiceChanged = voiceSel.value !== prefs.voice, speedChanged = +$("#speedSel").value !== +prefs.silence, personaChanged = $("#personaSel").value !== prefs.persona;
     prefs.voice = voiceSel.value; prefs.silence = +$("#speedSel").value; prefs.persona = $("#personaSel").value; savePrefs();
     $("#setBox").hidden = true; renderShelf();

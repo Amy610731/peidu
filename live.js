@@ -11,11 +11,21 @@
     { id: "Leda", label: "Leda（女・年輕）" }, { id: "Zephyr", label: "Zephyr（女・明亮）" },
     { id: "Puck", label: "Puck（男・活潑）" }, { id: "Charon", label: "Charon（男・知性）" },
     { id: "Fenrir", label: "Fenrir（男・有精神）" }, { id: "Orus", label: "Orus（男・穩重）" },
+    { id: "child-az-xiaoyi", label: "童音・小女生 Xiaoyi（Azure，開口慢 1 秒）" },
+    { id: "child-az-xiaoyou", label: "童音・小女孩 Xiaoyou（Azure）" },
+    { id: "child-az-yunxia", label: "童音・小男生 Yunxia（Azure）" },
   ];
+  // 童音：Gemini 沒有童聲、變聲又像變聲器 → 用 Azure 語音的童聲念 Gemini 的字幕（要 opts.tts，金鑰在設定裡）
+  const TTS_VOICES = {
+    "child-az-xiaoyi": { azure: "zh-CN-XiaoyiNeural", pitch: 15, rate: -5, base: "Kore" },  // Amy 試聽選的那個調法
+    "child-az-xiaoyou": { azure: "zh-CN-XiaoyouNeural", pitch: 0, rate: -5, base: "Kore" },  // 官方標「兒童」
+    "child-az-yunxia": { azure: "zh-CN-YunxiaNeural", pitch: 0, rate: -5, base: "Kore" },    // 卡通小男生
+  };
+  const ttsVoice = id => TTS_VOICES[id] || null;
   // 童音（2026-10-12 量過：影片裡的小朋友約 320Hz；Despina 約 238Hz、Leda 約 221Hz）
   // 變聲童音 Amy 試聽後覺得「像變聲器」→ 先拿掉（2026-10-12）；之後改接真人童聲 TTS 再加回選單
   const CHILD = {};
-  const voiceName = id => (CHILD[id] && CHILD[id].base) || (VOICES.some(v => v.id === id) ? id : "Kore");  // 舊設定存的已拿掉的聲音 → 用預設
+  const voiceName = id => (TTS_VOICES[id] && TTS_VOICES[id].base) || (CHILD[id] && CHILD[id].base) || (VOICES.some(v => v.id === id) ? id : "Kore");  // 舊設定存的已拿掉的聲音 → 用預設
   const voicePitch = id => (CHILD[id] && CHILD[id].pitch) || 1;
 
   // 變聲：音高升高、語速不變。兩條「一直縮短」的延遲線輪流接手、交叉淡入淡出（Chris Wilson 的 Jungle 演算法）
@@ -120,8 +130,55 @@
     src.onended = () => { S && S.sources.delete(src); if (S && !S.sources.size && S.lastStatus === "speaking") status("listening"); };
     if (S.lastStatus !== "speaking") status("speaking");  // 每一小段聲音都通知會讓畫面一直重畫
   }
+  // ---- 童音模式：字幕一句一句交給 TTS，按順序接著播 ----
+  function ttsOn() { return !!(S && S.opts.tts && ttsVoice(S.opts.voice)); }
+  function ttsFeed(text, final) {
+    S.ttsBuf = (S.ttsBuf || "") + text;
+    for (;;) {
+      // 句號、問號、驚嘆號一定斷；逗號等句子夠長才斷（太碎會一頓一頓）
+      const m = S.ttsBuf.match(/^[\s\S]*?[。！？!?；;\n]/) || (S.ttsBuf.length > 22 && S.ttsBuf.match(/^[\s\S]{8,}?[，,、：:]/));
+      if (!m) break;
+      ttsSay(m[0]); S.ttsBuf = S.ttsBuf.slice(m[0].length);
+    }
+    if (final && S.ttsBuf.trim()) { ttsSay(S.ttsBuf); S.ttsBuf = ""; }
+  }
+  function ttsSay(raw) {
+    const text = tidy(raw).replace(/\s+/g, " ").trim();
+    if (!/[\p{L}\p{N}]/u.test(text)) return;
+    const gen = S.ttsGen || 0, v = ttsVoice(S.opts.voice), ctx = CTX;
+    const job = S.opts.tts(text, v).then(ab => ctx.decodeAudioData(ab))  // 先平行去轉，播放再照順序
+      .catch(err => { if (S && !S.ttsErrShown) { S.ttsErrShown = true; S.opts.onTtsError && S.opts.onTtsError(err); } return null; });
+    S.ttsChain = (S.ttsChain || Promise.resolve()).then(() => job).then(buf => {
+      if (!S || S.ttsGen !== gen) return;
+      if (!buf) return speakFallback(text, gen);  // 童音這句念不出來 → 先用手機內建聲音念
+      const src = ctx.createBufferSource();
+      src.buffer = buf; src.connect(S.outGain);
+      const at = Math.max(ctx.currentTime + (S.sources.size ? 0 : 0.03), S.playAt);
+      src.start(at); S.playAt = at + buf.duration;
+      S.sources.add(src);
+      if (S.lastSendAt && !S.firstAudioAt) {  // 量反應速度：送出問題 → 童音開口
+        S.firstAudioAt = performance.now(); S.lastLatency = Math.round(S.firstAudioAt - S.lastSendAt);
+        S.opts.onLatency && S.opts.onLatency(S.lastLatency);
+      }
+      src.onended = () => { S && S.sources.delete(src); if (S && !S.sources.size && S.lastStatus === "speaking") status("listening"); };
+      if (S.lastStatus !== "speaking") status("speaking");
+    });
+  }
+  function speakFallback(text, gen) {
+    if (!("speechSynthesis" in window)) return;
+    return new Promise(res => {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "zh-TW"; u.rate = 1.05;
+      u.onend = u.onerror = () => { res(); if (S && !S.sources.size && S.ttsGen === gen) status("listening"); };
+      if (!S || S.ttsGen !== gen) return res();
+      status("speaking");
+      speechSynthesis.speak(u);
+    });
+  }
   function stopPlayback() {
     if (!S) return;
+    S.ttsGen = (S.ttsGen || 0) + 1; S.ttsBuf = "";  // 童音：還沒念的句子全部作廢
+    try { if (window.speechSynthesis) speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
     for (const s of S.sources) { try { s.stop(); } catch (e) { /* 已經停了 */ } }
     S.sources.clear(); S.playAt = 0;
   }
@@ -212,6 +269,7 @@
       if (S.quiet) { if (sc.turnComplete) { S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; } return; }
       if (sc.interrupted) { stopPlayback(); status("listening"); }  // 插話 → 老師馬上閉嘴
       if (sc.inputTranscription && sc.inputTranscription.text) {
+        if (ttsOn() && S.sources.size) stopPlayback();  // 童音還在念、她開口了 → 停下來聽她說
         S.amyText += sc.inputTranscription.text;
         caption();
       }
@@ -219,16 +277,17 @@
         S.claudeText += sc.outputTranscription.text;
         S.turnOut = (S.turnOut || 0) + sc.outputTranscription.text.length;
         caption();
+        if (ttsOn()) ttsFeed(sc.outputTranscription.text, false);
       }
       for (const p of (sc.modelTurn && sc.modelTurn.parts) || []) {
         if (p.inlineData && p.inlineData.data) {
-          if (S.lastSendAt && !S.firstAudioAt) {  // 量反應速度：送出問題 → 第一段聲音
+          if (S.lastSendAt && !S.firstAudioAt && !ttsOn()) {  // 量反應速度：送出問題 → 第一段聲音
             S.firstAudioAt = performance.now();
             S.lastLatency = Math.round(S.firstAudioAt - S.lastSendAt);
             S.opts.onLatency && S.opts.onLatency(S.lastLatency);
           }
           const rate = +((p.inlineData.mimeType || "").match(/rate=(\d+)/) || [0, 24000])[1];
-          playChunk(p.inlineData.data, rate);
+          if (!ttsOn()) playChunk(p.inlineData.data, rate);  // 童音模式：Gemini 自己的聲音不放
           S.turnAudio++;
         }
       }
@@ -238,6 +297,7 @@
         const info = { model: S.model, amy: S.amyText.trim() || S.lastText || S.lastAmy || "" };
         setTimeout(() => S && S.opts.onNoAudio(info));
       }
+      if (ttsOn() && (sc.generationComplete || sc.turnComplete)) ttsFeed("", true);  // 最後一句沒標點也要念
       if (sc.interrupted) flushTurn();
       if (sc.turnComplete) { flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; S.quiet = true; }
     };
@@ -411,7 +471,7 @@
     S.muted = v;
   }
 
-  g.PeiduLive = { makePitchShifter, voicePitch,
+  g.PeiduLive = { ttsVoice,
     VOICES, start, stop, restart, sendText, setMuted,
     isOn: () => !!S, isMuted: () => !!(S && S.muted), status: () => (S ? S.lastStatus : "off"),
     stats: () => (S ? { model: S.model, ready: S.ready, micKind: S.mic && S.mic.kind, micRate: S.micRate,
