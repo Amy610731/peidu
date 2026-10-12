@@ -11,14 +11,11 @@
     { id: "Leda", label: "Leda（女・年輕）" }, { id: "Zephyr", label: "Zephyr（女・明亮）" },
     { id: "Puck", label: "Puck（男・活潑）" }, { id: "Charon", label: "Charon（男・知性）" },
     { id: "Fenrir", label: "Fenrir（男・有精神）" }, { id: "Orus", label: "Orus（男・穩重）" },
-    { id: "child-girl", label: "童音・小女生（7、8 歲）" }, { id: "child-boy", label: "童音・小男生（7、8 歲）" },
   ];
   // 童音（2026-10-12 量過：影片裡的小朋友約 320Hz；Despina 約 238Hz、Leda 約 221Hz）
-  const CHILD = {
-    "child-girl": { base: "Despina", pitch: 1.35 },  // → 約 320Hz
-    "child-boy": { base: "Leda", pitch: 1.30 },      // → 約 290Hz（小男生稍微低一點）
-  };
-  const voiceName = id => (CHILD[id] && CHILD[id].base) || id || "Kore";
+  // 變聲童音 Amy 試聽後覺得「像變聲器」→ 先拿掉（2026-10-12）；之後改接真人童聲 TTS 再加回選單
+  const CHILD = {};
+  const voiceName = id => (CHILD[id] && CHILD[id].base) || (VOICES.some(v => v.id === id) ? id : "Kore");  // 舊設定存的已拿掉的聲音 → 用預設
   const voicePitch = id => (CHILD[id] && CHILD[id].pitch) || 1;
 
   // 變聲：音高升高、語速不變。兩條「一直縮短」的延遲線輪流接手、交叉淡入淡出（Chris Wilson 的 Jungle 演算法）
@@ -188,6 +185,7 @@
       if (d.goAway) { status("reconnecting"); return; }  // 快到時間上限，等它關掉再自動重連
       if (d.toolCall) {  // 老師要查資料／畫重點
         const calls = d.toolCall.functionCalls || [];
+        if ((S.turnOut || 0) > 15) S.quiet = true;  // 答案已經講完才叫工具 → 工具結果回來後多講的都不放
         const prev = S.lastStatus;
         if (calls.some(fc => fc.name === "lookup")) status("looking");
         const responses = await Promise.all(calls.map(async fc => {
@@ -208,6 +206,10 @@
       }
       const sc = d.serverContent;
       if (!sc) return;
+      // 她開口（插話／有字幕）＝新的一輪
+      if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) S.quiet = false;
+      // 講完之後沒人問、模型卻自己又講（畫完重點再講一次、自己跳下一題）→ 不放、不記
+      if (S.quiet) { if (sc.turnComplete) { S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; } return; }
       if (sc.interrupted) { stopPlayback(); status("listening"); }  // 插話 → 老師馬上閉嘴
       if (sc.inputTranscription && sc.inputTranscription.text) {
         S.amyText += sc.inputTranscription.text;
@@ -237,7 +239,7 @@
         setTimeout(() => S && S.opts.onNoAudio(info));
       }
       if (sc.interrupted) flushTurn();
-      if (sc.turnComplete) { flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; }
+      if (sc.turnComplete) { flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; S.quiet = true; }
     };
     ws.onclose = e => {
       if (!S || ws !== S.ws) return;
@@ -258,6 +260,16 @@
       } else fail(new Error("連線一直斷掉（" + e.code + (reason ? "：" + reason : "") + "）"));
     };
     ws.onerror = () => { /* onclose 會接手 */ };
+  }
+
+  // 她在講話嗎（麥克風音量）：連續 0.25 秒夠大聲 → 新的一輪開始，解除「安靜」
+  function voiceActivity(samples, rate, scale) {
+    if (!S) return;
+    let e = 0;
+    for (let i = 0; i < samples.length; i++) { const v = samples[i] * scale; e += v * v; }
+    const loud = Math.sqrt(e / Math.max(1, samples.length)) > 0.03;
+    S.loudMs = loud ? (S.loudMs || 0) + samples.length / rate * 1000 : 0;
+    if (S.loudMs >= 250) S.quiet = false;
   }
 
   function fail(err) {
@@ -284,6 +296,7 @@
 
   function sendPcm(i16) {
     if (!S || !S.ready || S.muted || !S.ws || S.ws.readyState !== 1 || !i16.length) return;
+    voiceActivity(i16, S.micRate, 1 / 32768);
     S.ws.send(JSON.stringify({ realtimeInput: { audio: { data: b64FromI16(i16), mimeType: "audio/pcm;rate=" + S.micRate } } }));
   }
 
@@ -382,7 +395,7 @@
   // 傳一段文字給老師：turnComplete=true 表示「請回答」；false＝只是補充資料（例如翻頁了）
   function sendText(text, turnComplete = true) {
     if (!S) return false;
-    if (turnComplete) { stopPlayback(); S.lastText = text; S.amyText = ""; S.lastSendAt = performance.now(); S.firstAudioAt = 0; }
+    if (turnComplete) { stopPlayback(); S.lastText = text; S.amyText = ""; S.lastSendAt = performance.now(); S.firstAudioAt = 0; S.quiet = false; }
     const msg = JSON.stringify({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete } });
     if (S.ready && S.ws && S.ws.readyState === 1) S.ws.send(msg); else S.queued.push(msg);
     return true;
