@@ -11,7 +11,55 @@
     { id: "Leda", label: "Leda（女・年輕）" }, { id: "Zephyr", label: "Zephyr（女・明亮）" },
     { id: "Puck", label: "Puck（男・活潑）" }, { id: "Charon", label: "Charon（男・知性）" },
     { id: "Fenrir", label: "Fenrir（男・有精神）" }, { id: "Orus", label: "Orus（男・穩重）" },
+    { id: "child-girl", label: "童音・小女生（7、8 歲）" }, { id: "child-boy", label: "童音・小男生（7、8 歲）" },
   ];
+  // 童音（2026-10-12 量過：影片裡的小朋友約 320Hz；Despina 約 238Hz、Leda 約 221Hz）
+  const CHILD = {
+    "child-girl": { base: "Despina", pitch: 1.35 },  // → 約 320Hz
+    "child-boy": { base: "Leda", pitch: 1.30 },      // → 約 290Hz（小男生稍微低一點）
+  };
+  const voiceName = id => (CHILD[id] && CHILD[id].base) || id || "Kore";
+  const voicePitch = id => (CHILD[id] && CHILD[id].pitch) || 1;
+
+  // 變聲：音高升高、語速不變。兩條「一直縮短」的延遲線輪流接手、交叉淡入淡出（Chris Wilson 的 Jungle 演算法）
+  function makePitchShifter(ctx, ratio) {
+    const T = 0.1, F = 0.05;  // 每段 0.1 秒，前後各 0.05 秒淡入淡出
+    const sr = ctx.sampleRate, n = Math.round(T * sr), fadeN = Math.round(F * sr);
+    const ramp = ctx.createBuffer(1, n, sr), fade = ctx.createBuffer(1, n, sr);
+    const r = ramp.getChannelData(0), f = fade.getChannelData(0);
+    for (let i = 0; i < n; i++) {
+      r[i] = (n - i) / n;  // 延遲從最大降到 0 → 讀得比寫得快 → 音高變高
+      f[i] = i < fadeN ? Math.sqrt(i / fadeN) : i >= n - fadeN ? Math.sqrt((n - i) / fadeN) : 1;
+    }
+    const input = ctx.createGain(), output = ctx.createGain(), srcs = [];
+    output.gain.value = 0.85;  // 兩段疊加時會比原聲大一點，先壓低免得破音
+    const depth = Math.max(0, ratio - 1) * T;  // 每段延遲少掉 depth 秒 → 播放速度 1 + depth/T = ratio
+    for (const offset of [0, T - F]) {
+      const delay = ctx.createDelay(1);
+      const mod = ctx.createBufferSource(); mod.buffer = ramp; mod.loop = true;
+      const modGain = ctx.createGain(); modGain.gain.value = depth;
+      const fader = ctx.createBufferSource(); fader.buffer = fade; fader.loop = true;
+      const mix = ctx.createGain(); mix.gain.value = 0;
+      mod.connect(modGain); modGain.connect(delay.delayTime);
+      fader.connect(mix.gain);
+      input.connect(delay); delay.connect(mix); mix.connect(output);
+      const t = ctx.currentTime + 0.02 + offset;
+      mod.start(t); fader.start(t);
+      srcs.push(mod, fader);
+    }
+    return { input, output, stop() { for (const s of srcs) { try { s.stop(); } catch (e) { /* 已經停了 */ } } try { input.disconnect(); output.disconnect(); } catch (e) { /* 忽略 */ } } };
+  }
+
+  // 喇叭前面要不要接變聲器（換聲音時重接，麥克風不用重開）
+  function routeVoice() {
+    const ctx = CTX;
+    try { S.outGain.disconnect(); } catch (e) { /* 忽略 */ }
+    if (S.shifter) { S.shifter.stop(); S.shifter = null; }
+    const p = voicePitch(S.opts.voice);
+    if (p > 1) { S.shifter = makePitchShifter(ctx, p); S.outGain.connect(S.shifter.input); S.shifter.output.connect(ctx.destination); }
+    else S.outGain.connect(ctx.destination);
+  }
+
   // worklet 檔案跟 live.js 放在同一個資料夾
   const HERE = (document.currentScript && document.currentScript.src) || location.href;
   const WORKLET_URL = new URL("mic-worklet.js", HERE).href;
@@ -121,7 +169,7 @@
     ws.onopen = () => ws.send(JSON.stringify({ setup: {
       model: cfg.model,
       generationConfig: { responseModalities: ["AUDIO"],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: S.opts.voice || "Kore" } } } },
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName(S.opts.voice) } } } },
       systemInstruction: { parts: [{ text: cfg.system }] },
       inputAudioTranscription: {}, outputAudioTranscription: {},
       contextWindowCompression: { slidingWindow: {} },  // 聊久一點也不會被切斷
@@ -277,7 +325,7 @@
     try { ctx = ensureCtx(); } catch (err) { opts.onError && opts.onError(err); return Promise.resolve(); }
     S = { opts, ws: null, ready: false, queued: [], sources: new Set(), playAt: 0, amyText: "", claudeText: "",
           retries: 0, stopping: false, muted: false, mic: null, micRate: 16000, outGain: ctx.createGain() };
-    S.outGain.connect(ctx.destination);
+    routeVoice();
     status("connecting");
     const mine = S;
     return (async () => {
@@ -301,6 +349,7 @@
     if (!S) return false;
     Object.assign(S.opts, patch || {});
     stopPlayback();
+    routeVoice();
     const old = S.ws;
     S.ws = null; S.ready = false; S.retries = 0;
     try { old && old.close(); } catch (e) { /* 忽略 */ }
@@ -323,6 +372,7 @@
       s.mic.stream.getTracks().forEach(t => t.stop());
     }
     try { s.outGain.disconnect(); } catch (e) { /* 忽略 */ }
+    if (s.shifter) s.shifter.stop();
     S = null;
     try { if (navigator.audioSession) navigator.audioSession.type = "auto"; } catch (e) { /* 忽略 */ }
     if (CTX && CTX.state === "running") CTX.suspend().catch(() => {});  // 不關掉：下次按麥克風時叫醒就好
@@ -348,7 +398,7 @@
     S.muted = v;
   }
 
-  g.PeiduLive = {
+  g.PeiduLive = { makePitchShifter, voicePitch,
     VOICES, start, stop, restart, sendText, setMuted,
     isOn: () => !!S, isMuted: () => !!(S && S.muted), status: () => (S ? S.lastStatus : "off"),
     stats: () => (S ? { model: S.model, ready: S.ready, micKind: S.mic && S.mic.kind, micRate: S.micRate,
