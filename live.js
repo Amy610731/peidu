@@ -131,7 +131,15 @@
     if (S.lastStatus !== "speaking") status("speaking");  // 每一小段聲音都通知會讓畫面一直重畫
   }
   // ---- 童音模式：字幕一句一句交給 TTS，按順序接著播 ----
-  function ttsOn() { return !!(S && S.opts.tts && ttsVoice(S.opts.voice)); }
+  function ttsOn() { return !!(S && S.opts.tts && ttsVoice(S.opts.voice) && !S.ttsOff); }
+  // 童音念不出來（沒金鑰、額度用完…）→ 這次對話改回 Gemini 自己的聲音，先收著的這一輪聲音補放
+  function ttsGiveUp(err) {
+    if (!S || S.ttsOff) return;
+    S.ttsOff = true; S.ttsGen = (S.ttsGen || 0) + 1; S.ttsBuf = "";
+    const pend = S.pendingAudio || []; S.pendingAudio = [];
+    for (const [data, rate] of pend) playChunk(data, rate);
+    S.opts.onTtsError && S.opts.onTtsError(err);
+  }
   function ttsFeed(text, final) {
     S.ttsBuf = (S.ttsBuf || "") + text;
     for (;;) {
@@ -147,10 +155,10 @@
     if (!/[\p{L}\p{N}]/u.test(text)) return;
     const gen = S.ttsGen || 0, v = ttsVoice(S.opts.voice), ctx = CTX;
     const job = S.opts.tts(text, v).then(ab => ctx.decodeAudioData(ab))  // 先平行去轉，播放再照順序
-      .catch(err => { if (S && !S.ttsErrShown) { S.ttsErrShown = true; S.opts.onTtsError && S.opts.onTtsError(err); } return null; });
+      .catch(err => { ttsGiveUp(err); return null; });
     S.ttsChain = (S.ttsChain || Promise.resolve()).then(() => job).then(buf => {
       if (!S || S.ttsGen !== gen) return;
-      if (!buf) return speakFallback(text, gen);  // 童音這句念不出來 → 先用手機內建聲音念
+      if (!buf) return;
       const src = ctx.createBufferSource();
       src.buffer = buf; src.connect(S.outGain);
       const at = Math.max(ctx.currentTime + (S.sources.size ? 0 : 0.03), S.playAt);
@@ -164,21 +172,9 @@
       if (S.lastStatus !== "speaking") status("speaking");
     });
   }
-  function speakFallback(text, gen) {
-    if (!("speechSynthesis" in window)) return;
-    return new Promise(res => {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "zh-TW"; u.rate = 1.05;
-      u.onend = u.onerror = () => { res(); if (S && !S.sources.size && S.ttsGen === gen) status("listening"); };
-      if (!S || S.ttsGen !== gen) return res();
-      status("speaking");
-      speechSynthesis.speak(u);
-    });
-  }
   function stopPlayback() {
     if (!S) return;
-    S.ttsGen = (S.ttsGen || 0) + 1; S.ttsBuf = "";  // 童音：還沒念的句子全部作廢
-    try { if (window.speechSynthesis) speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
+    S.ttsGen = (S.ttsGen || 0) + 1; S.ttsBuf = ""; S.pendingAudio = [];  // 童音：還沒念的句子全部作廢
     for (const s of S.sources) { try { s.stop(); } catch (e) { /* 已經停了 */ } }
     S.sources.clear(); S.playAt = 0;
   }
@@ -264,7 +260,7 @@
       const sc = d.serverContent;
       if (!sc) return;
       // 她開口（插話／有字幕）＝新的一輪
-      if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) S.quiet = false;
+      if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; }
       // 講完之後沒人問、模型卻自己又講（畫完重點再講一次、自己跳下一題）→ 不放、不記
       if (S.quiet) { if (sc.turnComplete) { S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; } return; }
       if (sc.interrupted) { stopPlayback(); status("listening"); }  // 插話 → 老師馬上閉嘴
@@ -288,6 +284,7 @@
           }
           const rate = +((p.inlineData.mimeType || "").match(/rate=(\d+)/) || [0, 24000])[1];
           if (!ttsOn()) playChunk(p.inlineData.data, rate);  // 童音模式：Gemini 自己的聲音不放
+          else (S.pendingAudio = S.pendingAudio || []).push([p.inlineData.data, rate]);  // 先收著，童音念不出來時補放
           S.turnAudio++;
         }
       }

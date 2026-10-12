@@ -1046,7 +1046,7 @@
       silenceMs: +prefs.silence,
       // 童音：字幕一句一句交給 Azure 念；念不出來那句會改用手機內建聲音
       tts: (text, v) => azureTts(text, v),
-      onTtsError: err => { toast("童音念不出來：" + (err.message || err) + "，先用手機內建的聲音", 5000); S.sys.push({ text: "童音念不出來：" + (err.message || err), after: S.chat.length }); if (S.tab === "chat") renderSide(); },
+      onTtsError: err => { toast("童音念不出來：" + (err.message || err) + "，這次先用老師原本的聲音", 5000); S.sys.push({ text: "童音念不出來：" + (err.message || err), after: S.chat.length }); if (S.tab === "chat") renderSide(); },
       getConfig: async () => {
         const key = await getKey();
         if (!key) throw new Error("NEED_KEY");
