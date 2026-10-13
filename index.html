@@ -14,7 +14,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon192.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/icon180.png">
-<link rel="stylesheet" href="style.css?v=20261012f">
+<link rel="stylesheet" href="style.css?v=20261013a">
 </head>
 <body>
 <div id="app">
@@ -86,6 +86,7 @@
       </form>
 
       <form id="chatBox" class="chatbox">
+        <div id="chatSplit" class="hsplit" role="separator" aria-orientation="horizontal" aria-label="上下拖曳調整打字區高度（點兩下回預設）"></div>
         <div class="chat-row">
           <textarea id="chatIn" rows="1" placeholder="打字問老師（老師會用說的回答）" enterkeyhint="send" aria-label="打字問老師"></textarea>
           <button type="submit" id="sendBtn" class="btn primary">送出</button>
@@ -217,7 +218,7 @@
         </select>
       </div>
     </section>
-    <p class="small" style="margin:0;opacity:.7">網站版本：20261012f（更新後如果看到的日期還是舊的，就把頁面重新整理）</p>
+    <p class="small" style="margin:0;opacity:.7">網站版本：20261013a（更新後如果看到的日期還是舊的，就把頁面重新整理）</p>
     <div class="modal-acts">
       <button type="button" id="keyClear" class="btn ghost">刪除金鑰</button>
       <button type="button" id="setClose" class="btn ghost">取消</button>
@@ -278,8 +279,8 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="mindmap.js?v=20261012f"></script>
-<script src="live.js?v=20261012f"></script>
-<script src="app.js?v=20261012f"></script>
+<script src="mindmap.js?v=20261013a"></script>
+<script src="live.js?v=20261013a"></script>
+<script src="app.js?v=20261013a"></script>
 </body>
 </html>

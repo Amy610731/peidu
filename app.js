@@ -1305,6 +1305,33 @@
       $$(`.hl[data-id="${CSS.escape(a.id)}"]`, p.el).forEach(h => { h.classList.remove("flash"); void h.offsetWidth; h.classList.add("flash"); });
     });
   }
+  // 對話區的橫線：上下拖曳調整下方輸入／設定區的高度（點兩下回預設），高度記在這台裝置
+  function makeHSplit(split, box, key, minH, reserve = 140) {  // reserve：上面對話紀錄至少留多高
+    const apply = (h, clampIt) => {
+      if (clampIt) { const area = box.parentElement.getBoundingClientRect().height; h = Math.max(minH, Math.min(h, area - reserve)); }
+      box.style.height = h + "px"; box.style.maxHeight = "none"; box.classList.add("sized");
+    };
+    try { const h = +localStorage.getItem(key); if (h) apply(h, false); } catch (e) { /* 沒存過 */ }
+    let d = null;
+    split.addEventListener("pointerdown", e => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      d = { y: e.clientY, h: box.getBoundingClientRect().height };
+      split.setPointerCapture(e.pointerId); document.body.classList.add("vresizing"); e.preventDefault();
+    });
+    split.addEventListener("pointermove", e => { if (d) apply(d.h + (d.y - e.clientY), true); });
+    const end = () => {
+      if (!d) return;
+      d = null; document.body.classList.remove("vresizing");
+      try { localStorage.setItem(key, Math.round(box.getBoundingClientRect().height)); } catch (e) { /* 忽略 */ }
+    };
+    split.addEventListener("pointerup", end); split.addEventListener("pointercancel", end);
+    split.addEventListener("dblclick", () => {
+      box.style.height = ""; box.style.maxHeight = ""; box.classList.remove("sized");
+      try { localStorage.removeItem(key); } catch (e) { /* 忽略 */ }
+    });
+  }
+  makeHSplit($("#chatSplit"), $("#chatBox"), "peidu-phone-chatbox-h2" + (mqWide.matches ? "-wide" : ""), 64, 200);  // 手機、平板各記各的
+
   $("#chatBox").addEventListener("submit", e => {
     e.preventDefault();
     const v = $("#chatIn").value.trim();

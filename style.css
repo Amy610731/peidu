@@ -249,6 +249,15 @@ body.box .page, body.box .textLayer span { user-select: none; -webkit-user-selec
 .comp-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .chat-row { display: flex; gap: 8px; align-items: flex-end; }
 #chatIn { flex: 1; min-width: 0; min-height: var(--tap); max-height: 30vh; resize: none; }
+/* 對話區的橫線（打字區上緣）：上下拖曳調整打字區高度，中間有小把手好用手指抓 */
+.chatbox { position: relative; }
+.hsplit { position: absolute; left: 0; right: 0; top: -12px; height: 24px; z-index: 3; cursor: row-resize; touch-action: none; display: flex; align-items: center; justify-content: center; }
+.hsplit::before { content: ""; width: 48px; height: 5px; border-radius: 3px; background: var(--rule); transition: background .15s, width .15s; }
+.hsplit:hover::before, body.vresizing .hsplit::before { width: 68px; background: var(--accent); }
+body.vresizing, body.vresizing * { cursor: row-resize !important; user-select: none !important; -webkit-user-select: none !important; }
+.chatbox.sized { grid-template-rows: minmax(0, 1fr); max-height: 55% !important; }  /* 打字區最多占對話欄一半多一點，對話紀錄才看得到 */
+.chatbox.sized .chat-row { height: 100%; align-items: stretch; }
+.chatbox.sized #chatIn { max-height: none; height: 100%; }
 
 @media (min-width: 900px) {
   #reader {
