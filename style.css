@@ -251,6 +251,7 @@ body.box .page, body.box .textLayer span { user-select: none; -webkit-user-selec
 #chatIn { flex: 1; min-width: 0; min-height: var(--tap); max-height: 30vh; resize: none; }
 /* 對話區的橫線（打字區上緣）：上下拖曳調整打字區高度，中間有小把手好用手指抓 */
 .chatbox { position: relative; }
+.vsplit { display: none; }
 .hsplit { position: absolute; left: 0; right: 0; top: -12px; height: 24px; z-index: 3; cursor: row-resize; touch-action: none; display: flex; align-items: center; justify-content: center; }
 .hsplit::before { content: ""; width: 48px; height: 5px; border-radius: 3px; background: var(--rule); transition: background .15s, width .15s; }
 .hsplit:hover::before, body.vresizing .hsplit::before { width: 68px; background: var(--accent); }
@@ -261,11 +262,16 @@ body.vresizing, body.vresizing * { cursor: row-resize !important; user-select: n
 
 @media (min-width: 900px) {
   #reader {
-    grid-template-columns: minmax(0, 1fr) 380px;
+    grid-template-columns: minmax(0, 1fr) var(--side-w, 380px);
     grid-template-rows: auto minmax(0, 1fr) auto;
     grid-template-areas: "top side" "view side" "dock side";
   }
-  #side { display: flex; border-top: 0; border-left: 1px solid var(--rule); padding-top: calc(10px + var(--sat)); height: auto !important; }
+  #side { display: flex; border-top: 0; border-left: 1px solid var(--rule); padding-top: calc(10px + var(--sat)); height: auto !important; position: relative; }
+  /* PDF 和對話欄中間的直線：左右拖（中間有小把手，手指好抓） */
+  .vsplit { display: flex; position: absolute; top: 0; bottom: 0; left: -12px; width: 24px; z-index: 6; cursor: col-resize; touch-action: none; align-items: center; justify-content: center; }
+  .vsplit::before { content: ""; width: 5px; height: 48px; border-radius: 3px; background: var(--rule); transition: background .15s, height .15s; }
+  .vsplit:hover::before, body.hresizing .vsplit::before { height: 68px; background: var(--accent); }
+  body.hresizing, body.hresizing * { cursor: col-resize !important; user-select: none !important; -webkit-user-select: none !important; }
   .sheet-handle, #notesBtn, .tab-close { display: none !important; }
   .dock-row { grid-template-columns: minmax(0, 1fr) 64px; }
 }

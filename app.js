@@ -1330,6 +1330,27 @@
       try { localStorage.removeItem(key); } catch (e) { /* 忽略 */ }
     });
   }
+  // 平板：PDF 和對話欄中間的直線左右拖（寬度改了 PDF 會自己重新符合寬度）
+  (() => {
+    const sp = $("#sideSplit"), root = $("#reader"), KEY = "peidu-phone-side-w";
+    const apply = w => root.style.setProperty("--side-w", Math.max(300, Math.min(w, innerWidth - 420)) + "px");
+    try { const w = +localStorage.getItem(KEY); if (w) apply(w); } catch (e) { /* 沒存過 */ }
+    let d = null;
+    sp.addEventListener("pointerdown", e => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      d = { x: e.clientX, w: $("#side").getBoundingClientRect().width };
+      sp.setPointerCapture(e.pointerId); document.body.classList.add("hresizing"); e.preventDefault();
+    });
+    sp.addEventListener("pointermove", e => { if (d) apply(d.w + (d.x - e.clientX)); });
+    const end = () => {
+      if (!d) return;
+      d = null; document.body.classList.remove("hresizing");
+      try { localStorage.setItem(KEY, Math.round($("#side").getBoundingClientRect().width)); } catch (e) { /* 忽略 */ }
+      dispatchEvent(new Event("resize"));  // 讓 PDF 重新符合新的寬度
+    };
+    sp.addEventListener("pointerup", end); sp.addEventListener("pointercancel", end);
+    sp.addEventListener("dblclick", () => { root.style.removeProperty("--side-w"); try { localStorage.removeItem(KEY); } catch (e) { /* 忽略 */ } dispatchEvent(new Event("resize")); });
+  })();
   makeHSplit($("#chatSplit"), $("#chatBox"), "peidu-phone-chatbox-h2" + (mqWide.matches ? "-wide" : ""), 64, 200);  // 手機、平板各記各的
 
   $("#chatBox").addEventListener("submit", e => {
