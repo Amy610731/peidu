@@ -17,9 +17,9 @@
   ];
   // 童音：Gemini 沒有童聲、變聲又像變聲器 → 用 Azure 語音的童聲念 Gemini 的字幕（要 opts.tts，金鑰在設定裡）
   const TTS_VOICES = {
-    "child-az-xiaoyi": { azure: "zh-CN-XiaoyiNeural", pitch: 15, rate: -5, base: "Kore" },  // Amy 試聽選的那個調法
-    "child-az-xiaoyou": { azure: "zh-CN-XiaoyouNeural", pitch: 0, rate: -5, base: "Kore" },  // 官方標「兒童」
-    "child-az-yunxia": { azure: "zh-CN-YunxiaNeural", pitch: 0, rate: -5, base: "Kore" },    // 卡通小男生
+    "child-az-xiaoyi": { azure: "zh-CN-XiaoyiNeural", pitch: 15, rate: -12, base: "Kore" },  // Amy 試聽選的那個調法
+    "child-az-xiaoyou": { azure: "zh-CN-XiaoyouNeural", pitch: 0, rate: -12, base: "Kore" },  // 官方標「兒童」
+    "child-az-yunxia": { azure: "zh-CN-YunxiaNeural", pitch: 0, rate: -12, base: "Kore" },    // 卡通小男生
   };
   const ttsVoice = id => TTS_VOICES[id] || null;
   // 童音（2026-10-12 量過：影片裡的小朋友約 320Hz；Despina 約 238Hz、Leda 約 221Hz）
@@ -113,10 +113,73 @@
   function caption() { S.opts.onCaption && S.opts.onCaption({ amy: tidy(S.amyText), claude: tidy(S.claudeText) }); }
 
   // ---- 播放老師的聲音（24kHz PCM）：接續排程，被打斷就全部停掉 ----
-  function playChunk(b64, rate) {
+  // 放慢說話速度、音調不變（WSOLA：把聲音切成小段，找波形最接近的地方接起來，接縫才順）
+  // speed < 1 ＝ 變慢（0.85 ＝ 慢 15%）。串流用：push(一段聲音) 回傳可以播的聲音；一句講完 flush() 把尾巴吐出來
+  function makeStretcher(speed) {
+    const N = 960, Hs = N / 2, Ha = Hs * speed, TOL = 160;  // 24kHz：每段 40ms、半段重疊、前後找 6.7ms 內最像的位置
+    const win = new Float32Array(N);
+    for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);  // 50% 重疊的 Hann 窗，疊起來剛好是 1
+    let buf = new Float32Array(0), base = 0;  // buf[0] 是整段聲音的第 base 個樣本
+    let ap = 0, prev = -1;                     // ap：下一段大概要從哪裡拿；prev：上一段實際拿的位置
+    let acc = new Float32Array(N);             // 疊加中的輸出
+    function bestPos() {
+      if (prev < 0) return Math.round(ap);
+      const nat = prev + Hs;  // 「自然接下去」的位置：上一段後半接著的聲音
+      let best = Math.round(ap), bestScore = -Infinity;
+      const lo = Math.max(base, Math.round(ap) - TOL), hi = Math.round(ap) + TOL;
+      for (let k = lo; k <= hi; k += 2) {
+        let sc = 0;
+        for (let i = 0; i < Hs; i += 3) sc += buf[k - base + i] * buf[nat - base + i];
+        if (sc > bestScore) { bestScore = sc; best = k; }
+      }
+      return best;
+    }
+    function frame(pos, out) {
+      for (let i = 0; i < N; i++) acc[i] += buf[pos - base + i] * win[i];
+      out.push(acc.slice(0, Hs));
+      acc.copyWithin(0, Hs); acc.fill(0, N - Hs);
+      prev = pos; ap += Ha;
+    }
+    function trim() {  // 用過的聲音丟掉，記憶體才不會一直長
+      const keep = Math.min(Math.floor(ap) - TOL, prev + Hs) - base;
+      if (keep > 4096) { buf = buf.slice(keep); base += keep; }
+    }
+    function join(parts) {
+      let n = 0; for (const p of parts) n += p.length;
+      const o = new Float32Array(n); let off = 0;
+      for (const p of parts) { o.set(p, off); off += p.length; }
+      return o;
+    }
+    return {
+      push(f32) {
+        const nb = new Float32Array(buf.length + f32.length); nb.set(buf); nb.set(f32, buf.length); buf = nb;
+        const out = [];
+        while (Math.round(ap) + TOL + N <= base + buf.length && (prev < 0 || prev + Hs + N <= base + buf.length)) frame(bestPos(), out);
+        trim();
+        return join(out);
+      },
+      flush() {  // 一句講完：剩下不夠一段的也吐出來（補靜音）
+        const out = [];
+        const end = base + buf.length;
+        if (end - Math.round(ap) > 0) {
+          const pad = new Float32Array(N + TOL * 2);
+          const nb = new Float32Array(buf.length + pad.length); nb.set(buf); buf = nb;
+          while (Math.round(ap) < end) frame(prev < 0 ? Math.round(ap) : bestPos(), out);
+        }
+        out.push(acc.slice(0, Hs));
+        buf = new Float32Array(0); base = 0; ap = 0; prev = -1; acc = new Float32Array(N);
+        return join(out);
+      },
+      reset() { buf = new Float32Array(0); base = 0; ap = 0; prev = -1; acc = new Float32Array(N); },
+    };
+  }
+
+  function playChunk(b64, rate, raw) {
     const ctx = CTX;
     if (!ctx || ctx.state === "closed") return;
-    const f32 = f32FromB64(b64);
+    let f32 = raw || f32FromB64(b64);
+    if (S.stretch && !raw) f32 = S.stretch.push(f32);  // 老師語速：放慢（音調不變）
+    if (!f32.length) return;
     if (!f32.length) return;
     const buf = ctx.createBuffer(1, f32.length, rate);  // 指定 24000：放進 48000 的 context 時瀏覽器會自己重取樣
     buf.getChannelData(0).set(f32);
@@ -175,6 +238,7 @@
   function stopPlayback() {
     if (!S) return;
     S.ttsGen = (S.ttsGen || 0) + 1; S.ttsBuf = ""; S.pendingAudio = [];  // 童音：還沒念的句子全部作廢
+    if (S.stretch) S.stretch.reset();
     for (const s of S.sources) { try { s.stop(); } catch (e) { /* 已經停了 */ } }
     S.sources.clear(); S.playAt = 0;
   }
@@ -294,6 +358,8 @@
         const info = { model: S.model, amy: S.amyText.trim() || S.lastText || S.lastAmy || "" };
         setTimeout(() => S && S.opts.onNoAudio(info));
       }
+      // 放慢模式：這一輪聲音結束，把放慢器裡剩下的尾巴播完
+      if ((sc.generationComplete || sc.turnComplete) && S.stretch && !ttsOn()) { const t = S.stretch.flush(); if (t.length) playChunk(null, 24000, t); }
       if (ttsOn() && (sc.generationComplete || sc.turnComplete)) ttsFeed("", true);  // 最後一句沒標點也要念
       if (sc.interrupted) flushTurn();
       if (sc.turnComplete) { flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; S.quiet = true; }
@@ -396,6 +462,7 @@
     S = { opts, ws: null, ready: false, queued: [], sources: new Set(), playAt: 0, amyText: "", claudeText: "",
           retries: 0, stopping: false, muted: false, mic: null, micRate: 16000, outGain: ctx.createGain() };
     routeVoice();
+    S.stretch = opts.speed && opts.speed < 0.99 ? makeStretcher(opts.speed) : null;  // 老師語速
     status("connecting");
     const mine = S;
     return (async () => {
@@ -420,6 +487,7 @@
     Object.assign(S.opts, patch || {});
     stopPlayback();
     routeVoice();
+    S.stretch = S.opts.speed && S.opts.speed < 0.99 ? makeStretcher(S.opts.speed) : null;
     const old = S.ws;
     S.ws = null; S.ready = false; S.retries = 0;
     try { old && old.close(); } catch (e) { /* 忽略 */ }

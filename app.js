@@ -47,6 +47,8 @@
   const LIVE_RULES = `你現在是用「即時語音」回答學生：
 - 用台灣華語的口音和台灣常用詞（例如：影片、軟體、網路、資訊、品質）。
 - 照下面「說話個性」講話，講完就停。不叫她的名字、不寒暄、結尾不硬塞反問。她插話時馬上停下來聽。
+- 說話要慢、要清楚：用比平常聊天慢一點的速度，像老師對第一次學的學生講課，一句講完稍微停一下再講下一句；專有名詞、英文縮寫、數字要放慢念清楚。學生說「講快一點」才加快，說「再慢一點」就更慢。
+- 講新觀念時：先用一個生活化的例子（國中生都懂的日常情境）讓她聽懂，再帶出正式名詞和考試重點；一次不要丟太多名詞。
 - 不要念出標點、符號或格式；英文縮寫照念（例如 C I A、ISO 兩萬七千零一）。
 - 她問「這題」「這段」通常是指她現在這一頁，或她剛框起來傳給你的內容。
 - 講義以外的觀念問題照樣用你的知識回答。
@@ -151,7 +153,7 @@
     if (!r.ok) throw new Error("Azure 語音暫時不能用（" + r.status + "）");
     return r.arrayBuffer();
   }
-  const prefs = Object.assign({ voice: "Kore", silence: 500, persona: "tsundere" }, LS.get("peidu-phone-prefs", {}));
+  const prefs = Object.assign({ voice: "Kore", silence: 500, persona: "tsundere", speed: 0.9 }, LS.get("peidu-phone-prefs", {}));
   if (![500, 800, 1200].includes(+prefs.silence)) prefs.silence = 500;
   const savePrefs = () => LS.set("peidu-phone-prefs", prefs);
 
@@ -1148,6 +1150,7 @@
     PeiduLive.start({
       voice: prefs.voice,
       silenceMs: +prefs.silence,
+      speed: +prefs.speed || 0.9,  // 老師語速
       // 童音：字幕一句一句交給 Azure 念；念不出來那句會改用手機內建聲音
       tts: (text, v) => azureTts(text, v),
       onTtsError: err => { toast("童音念不出來：" + (err.message || err) + "，這次先用老師原本的聲音", 5000); S.sys.push({ text: "童音念不出來：" + (err.message || err), after: S.chat.length }); if (S.tab === "chat") renderSide(); },
@@ -1536,6 +1539,7 @@ ${chars.text.slice(0, 6000)}`;
       : storedKey() ? `已經存了一把金鑰（結尾 ${storedKey().slice(-4)}）。` : "還沒有金鑰。";
     const az = azureConf(); $("#azKeyIn").value = az ? az.key : ""; $("#azRegionIn").value = az ? az.region : "";
     $("#azState").textContent = az ? `已經存了 Azure 金鑰（區域 ${az.region}）。` : "還沒有 Azure 金鑰（不用童音就不用填）。";
+    $("#rateSel").value = String([1, 0.9, 0.8].includes(+prefs.speed) ? +prefs.speed : 0.9);
     voiceSel.value = prefs.voice; $("#speedSel").value = String(prefs.silence); $("#personaSel").value = PERSONAS[prefs.persona] ? prefs.persona : "tsundere";
     $("#setBox").hidden = false;
   }
@@ -1563,11 +1567,11 @@ ${chars.text.slice(0, 6000)}`;
         .then(() => toast("Azure 金鑰可以用 ✓ 「即時聲音」選童音就會用它", 4000))
         .catch(err => toast("Azure 金鑰不能用：" + err.message, 6000));
     } else if (!azKey && azOld) LS.del(AZ_LS);
-    const voiceChanged = voiceSel.value !== prefs.voice, speedChanged = +$("#speedSel").value !== +prefs.silence, personaChanged = $("#personaSel").value !== prefs.persona;
-    prefs.voice = voiceSel.value; prefs.silence = +$("#speedSel").value; prefs.persona = $("#personaSel").value; savePrefs();
+    const voiceChanged = voiceSel.value !== prefs.voice, speedChanged = +$("#speedSel").value !== +prefs.silence, personaChanged = $("#personaSel").value !== prefs.persona, rateChanged = +$("#rateSel").value !== +prefs.speed;
+    prefs.voice = voiceSel.value; prefs.silence = +$("#speedSel").value; prefs.persona = $("#personaSel").value; prefs.speed = +$("#rateSel").value; savePrefs();
     $("#setBox").hidden = true; renderShelf();
-    if (PeiduLive.isOn() && (voiceChanged || speedChanged || personaChanged || (k && k !== oldKey))) {
-      PeiduLive.restart({ voice: prefs.voice, silenceMs: prefs.silence });
+    if (PeiduLive.isOn() && (voiceChanged || speedChanged || personaChanged || rateChanged || (k && k !== oldKey))) {
+      PeiduLive.restart({ voice: prefs.voice, silenceMs: prefs.silence, speed: prefs.speed });
       toast("設定改好了，重新連線中");
     } else toast(k ? "存好了" : "設定存好了");
   };

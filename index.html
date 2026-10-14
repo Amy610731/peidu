@@ -14,7 +14,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon192.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/icon180.png">
-<link rel="stylesheet" href="style.css?v=20261014a">
+<link rel="stylesheet" href="style.css?v=20261014b">
 </head>
 <body>
 <div id="app">
@@ -223,6 +223,14 @@
           <option value="calm">冷靜重點（朋友聊天）</option>
         </select>
       </div>
+      <p class="set-title">老師語速（放慢時音調不變）</p>
+      <div class="set-row">
+        <select id="rateSel" aria-label="老師語速">
+          <option value="1">正常</option>
+          <option value="0.9">慢一點（預設）</option>
+          <option value="0.8">更慢</option>
+        </select>
+      </div>
       <p class="set-title">反應速度（你講完停多久，老師才開口）</p>
       <div class="set-row">
         <select id="speedSel" aria-label="反應速度">
@@ -232,7 +240,7 @@
         </select>
       </div>
     </section>
-    <p class="small" style="margin:0;opacity:.7">網站版本：20261014a（更新後如果看到的日期還是舊的，就把頁面重新整理）</p>
+    <p class="small" style="margin:0;opacity:.7">網站版本：20261014b（更新後如果看到的日期還是舊的，就把頁面重新整理）</p>
     <div class="modal-acts">
       <button type="button" id="keyClear" class="btn ghost">刪除金鑰</button>
       <button type="button" id="setClose" class="btn ghost">取消</button>
@@ -293,8 +301,8 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="mindmap.js?v=20261014a"></script>
-<script src="live.js?v=20261014a"></script>
-<script src="app.js?v=20261014a"></script>
+<script src="mindmap.js?v=20261014b"></script>
+<script src="live.js?v=20261014b"></script>
+<script src="app.js?v=20261014b"></script>
 </body>
 </html>
