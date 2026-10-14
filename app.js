@@ -503,6 +503,7 @@
       if (!file || !file.data) throw new Error("找不到這份講義的檔案");
       S.anns = anns || [];
       S.chat = (chat || []).sort((a, b) => String(a.created).localeCompare(String(b.created)));
+      S.lastRead = Math.max(1, +doc.lastPage || 1);  // 🔖 上次讀到第幾頁（這次開之前的）
       const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(file.data) }).promise;
       if (seq !== S.openSeq) { pdf.destroy(); return; }
       S.pdf = pdf;
@@ -513,6 +514,7 @@
       if (S.doc.pageCount !== pdf.numPages) { S.doc.pageCount = pdf.numPages; saveDocMeta(S.doc); }
       gotoPage(S.doc.savedPage);
       drawAllHighlights(); renderSide();
+      if (S.lastRead > 1) toast(`🔖 上次讀到第 ${S.lastRead} 頁，紅框那頁就是`, 3500);
     } catch (e) {
       if (seq !== S.openSeq) return;
       console.warn(e);
@@ -548,7 +550,8 @@
     for (let n = 1; n <= S.pdf.numPages; n++) {
       const el = document.createElement("div");
       el.className = "page"; el.dataset.page = n;
-      el.innerHTML = `<div class="hlLayer"></div><span class="pno">p.${n}</span>`;
+      el.innerHTML = `<div class="hlLayer"></div><span class="pno">p.${n}</span>` + (n === S.lastRead && n > 1 ? `<div class="lastMark">🔖 上次讀到這裡</div>` : "");
+      if (n === S.lastRead && n > 1) el.classList.add("last-read");
       frag.appendChild(el);
       const p = { n, el, w: vp1.width, h: vp1.height, page: n === 1 ? first : null, rendered: false, task: null };
       sizePage(p); S.pages.push(p);
@@ -661,9 +664,17 @@
     S.page = n;
     if (document.activeElement !== $("#pageIn")) $("#pageIn").value = n;
     if (S.tab === "page") renderSide(); else updateCounts();
+    paintLastChip();
     clearTimeout(S.lpT); S.lpT = setTimeout(saveLastPage, 1000);
     liveNotePage(n);
   }
+  // 離開上次讀到的那頁時，左上角出現「🔖 回到上次 p.X」，點一下跳回去
+  function paintLastChip() {
+    const chip = $("#lastChip"), n = S.lastRead || 0;
+    chip.hidden = !(S.pdf && n > 1 && S.page !== n);
+    chip.textContent = `🔖 回到上次 p.${n}`;
+  }
+  $("#lastChip").onclick = () => gotoPage(S.lastRead);
   function saveLastPage() {
     const d = S.doc; if (!d) return;
     const n = S.page; if (!n || d.savedPage === n) return;
@@ -776,8 +787,100 @@
         }
       }
     }
+    drawFindMarks();
   }
   function onAnnsChanged() { drawAllHighlights(); if (S.tab !== "chat") renderSide(); else updateCounts(); }
+
+  // ================= 🔍 搜尋整份講義 =================
+  const FIND = { q: "", results: [], cur: -1, doc: null, seq: 0 };
+  // 一頁裡找出所有符合處（忽略空白、全半形、大小寫）
+  function findAllRects(chars, q) {
+    const arr = chars.list.filter(c => !/\s/.test(c.n));
+    const txt = arr.map(c => c.n).join(""), out = [];
+    let idx = txt.indexOf(q);
+    while (idx >= 0) {
+      const byItem = new Map();
+      for (const c of arr.slice(idx, idx + q.length)) {
+        const r = byItem.get(c.item);
+        if (!r) byItem.set(c.item, [c.x0, c.y0, c.x1, c.y1]);
+        else { r[0] = Math.min(r[0], c.x0); r[1] = Math.min(r[1], c.y0); r[2] = Math.max(r[2], c.x1); r[3] = Math.max(r[3], c.y1); }
+      }
+      const a = Math.max(0, idx - 16), b = Math.min(arr.length, idx + q.length + 16), orig = arr.map(c => c.c);
+      out.push({ rects: mergeRects([...byItem.values()]),
+        snippet: (a ? "…" : "") + orig.slice(a, idx).join("") + "【" + orig.slice(idx, idx + q.length).join("") + "】" + orig.slice(idx + q.length, b).join("") + (b < arr.length ? "…" : "") });
+      idx = txt.indexOf(q, idx + q.length);
+    }
+    return out;
+  }
+  function drawFindMarks() {
+    $$("#pages .srch").forEach(x => x.remove());
+    if (!S.doc || FIND.doc !== S.doc.id) return;
+    FIND.results.forEach((r, i) => {
+      const p = S.pages[r.page - 1]; if (!p) return;
+      const layer = p.el.querySelector(".hlLayer");
+      for (const [x0, y0, x1, y1] of r.rects) {
+        const d = document.createElement("div");
+        d.className = "srch" + (i === FIND.cur ? " cur" : "");
+        d.style.cssText = `left:${x0 * 100 - 0.3}%;top:${y0 * 100 - 0.2}%;width:${(x1 - x0) * 100 + 0.6}%;height:${(y1 - y0) * 100 + 0.4}%`;
+        layer.appendChild(d);
+      }
+    });
+  }
+  function findGo(i) {
+    if (!FIND.results.length) return;
+    FIND.cur = (i + FIND.results.length) % FIND.results.length;
+    const r = FIND.results[FIND.cur], p = S.pages[r.page - 1];
+    drawFindMarks();
+    $("#findCount").textContent = `${FIND.cur + 1} / ${FIND.results.length}`;
+    $$("#findList button").forEach((b, k) => b.classList.toggle("cur", k === FIND.cur));
+    if (!p) return;
+    const [x0, y0, x1] = r.rects[0];
+    viewer.scrollTop = Math.max(0, p.el.offsetTop + y0 * p.el.offsetHeight - viewer.clientHeight / 3);
+    const cx = p.el.offsetLeft + ((x0 + x1) / 2) * p.el.offsetWidth;
+    if (cx < viewer.scrollLeft + 30 || cx > viewer.scrollLeft + viewer.clientWidth - 30) viewer.scrollLeft = cx - viewer.clientWidth / 2;
+    setPage(r.page); updateVisible();
+  }
+  async function findRun() {
+    const raw = $("#findIn").value.trim();
+    const q = [...raw].map(normChar).filter(c => !/\s/.test(c)).join("");
+    if (!S.pdf) return;
+    if (!q) { FIND.q = ""; FIND.results = []; drawFindMarks(); $("#findCount").textContent = ""; $("#findList").innerHTML = ""; return; }
+    if (q === FIND.q && S.doc && FIND.doc === S.doc.id) return findGo(FIND.cur + 1);  // 同一個字再按一次＝下一個
+    const seq = ++FIND.seq, doc = S.doc, results = [];
+    for (let n = 1; n <= S.pages.length; n++) {
+      if (seq !== FIND.seq || S.doc !== doc) return;
+      if (n % 10 === 1) $("#findCount").textContent = `${Math.round(n / S.pages.length * 100)}%`;
+      let chars; try { chars = await pageChars(n); } catch { continue; }
+      for (const m of findAllRects(chars, q)) { results.push({ page: n, ...m }); if (results.length >= 300) break; }
+      if (results.length >= 300) break;
+    }
+    Object.assign(FIND, { q, doc: doc.id, results, cur: -1 });
+    $("#findList").innerHTML = results.map((x, k) => `<button type="button" data-k="${k}"><b>p.${x.page}</b>${esc(x.snippet)}</button>`).join("");
+    if (!results.length) { drawFindMarks(); $("#findCount").textContent = "找不到"; return; }
+    const start = results.findIndex(x => x.page >= S.page);
+    findGo(start >= 0 ? start : 0);
+  }
+  function closeFind() {
+    $("#findBar").hidden = true; $("#findList").hidden = true;
+    FIND.q = ""; FIND.results = []; FIND.cur = -1; FIND.seq++; drawFindMarks();
+  }
+  $("#findBtn").onclick = () => {
+    if (!$("#findBar").hidden) return closeFind();
+    $("#findBar").hidden = false; viewer.scrollTop = viewer.scrollTop;  // 搜尋列固定在上方
+    const sel = String(window.getSelection && window.getSelection() || "").trim();
+    if (sel && sel.length <= 40) $("#findIn").value = sel;
+    $("#findIn").focus(); $("#findIn").select();
+  };
+  $("#findIn").addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); findRun(); $("#findIn").blur(); }
+    else if (e.key === "Escape") closeFind();
+  });
+  const sameQ = () => [...$("#findIn").value.trim()].map(normChar).filter(c => !/\s/.test(c)).join("") === FIND.q;
+  $("#findNext").onclick = () => (sameQ() && FIND.results.length ? findGo(FIND.cur + 1) : findRun());
+  $("#findPrev").onclick = () => (sameQ() && FIND.results.length ? findGo(FIND.cur - 1) : findRun());
+  $("#findListBtn").onclick = () => { $("#findList").hidden = !$("#findList").hidden; };
+  $("#findClose").onclick = closeFind;
+  $("#findList").addEventListener("click", e => { const b = e.target.closest("button[data-k]"); if (b) { findGo(+b.dataset.k); if (!mqWide.matches) $("#findList").hidden = true; } });
 
   // 點一下螢光筆 → 小選單：看是誰標的、刪除這個重點（拖曳選字、框選、畫筆時不觸發）
   const HLPOP = { id: null, down: null };
@@ -1005,7 +1108,8 @@
   }
   function paintCaption() {
     const c = LIVE.caption || LIVE.lastTurn;
-    const show = LIVE.status !== "off" && c && (c.amy || c.claude);
+    const chatShown = S.tab === "chat" && (mqWide.matches || S.sheetOpen);  // 對話欄已經在畫面上 → 不重複顯示字幕
+    const show = LIVE.status !== "off" && c && (c.amy || c.claude) && !chatShown;
     $("#caption").hidden = !show;
     if (!show) return;
     $("#capAmy").textContent = c.amy || "";
@@ -1160,12 +1264,12 @@
     if (minH) h = Math.max(h, minH);
     h = clamp(h, 160, Math.round(rh * 0.8));
     side.style.height = h + "px";
-    side.classList.add("open"); S.sheetOpen = true;
+    side.classList.add("open"); S.sheetOpen = true; paintCaption();
     $("#notesBtn").setAttribute("aria-pressed", "true");
     renderSide();
   }
   function closeSheet() {
-    side.classList.remove("open"); S.sheetOpen = false;
+    side.classList.remove("open"); S.sheetOpen = false; paintCaption();
     $("#notesBtn").setAttribute("aria-pressed", "false");
   }
   $("#notesBtn").onclick = () => { if (S.sheetOpen) closeSheet(); else openSheet(); };
@@ -1194,7 +1298,7 @@
     S.tab = t; S.editing = null;
     $$(".tabs button[data-tab]").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === t)));
     if (!S.comp) $("#chatBox").hidden = t !== "chat";
-    renderSide();
+    renderSide(); paintCaption();
   }
   $(".tabs").addEventListener("click", e => { const b = e.target.closest("button[data-tab]"); if (b) setTab(b.dataset.tab); });
 
