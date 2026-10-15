@@ -303,6 +303,7 @@
       if (d.toolCall) {  // 老師要查資料／畫重點
         const calls = d.toolCall.functionCalls || [];
         if ((S.turnOut || 0) > 15) S.quiet = true;  // 答案已經講完才叫工具 → 工具結果回來後多講的都不放
+        else S.toolPending = true;  // 還沒回答就先叫工具（例如先查資料）→ 答案在後面，要等它講
         const prev = S.lastStatus;
         if (calls.some(fc => fc.name === "lookup")) status("looking");
         const responses = await Promise.all(calls.map(async fc => {
@@ -324,7 +325,7 @@
       const sc = d.serverContent;
       if (!sc) return;
       // 她開口（插話／有字幕）＝新的一輪
-      if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; }
+      if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; S.toolPending = false; }
       // 講完之後沒人問、模型卻自己又講（畫完重點再講一次、自己跳下一題）→ 不放、不記
       if (S.quiet) { if (sc.turnComplete) { S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; } return; }
       if (sc.interrupted) { stopPlayback(); status("listening"); }  // 插話 → 老師馬上閉嘴
@@ -362,7 +363,12 @@
       if ((sc.generationComplete || sc.turnComplete) && S.stretch && !ttsOn()) { const t = S.stretch.flush(); if (t.length) playChunk(null, 24000, t); }
       if (ttsOn() && (sc.generationComplete || sc.turnComplete)) ttsFeed("", true);  // 最後一句沒標點也要念
       if (sc.interrupted) flushTurn();
-      if (sc.turnComplete) { flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; S.quiet = true; }
+      if (sc.turnComplete) {
+        const said = (S.turnOut || 0) > 0;
+        flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false;
+        // 3.8 叫完工具會先結束一輪、下一輪才講答案 → 還沒講到答案就不要安靜
+        if (S.toolPending && !said) { /* 等答案 */ } else { S.toolPending = false; S.quiet = true; }
+      }
     };
     ws.onclose = e => {
       if (!S || ws !== S.ws) return;
@@ -520,7 +526,7 @@
   // 傳一段文字給老師：turnComplete=true 表示「請回答」；false＝只是補充資料（例如翻頁了）
   function sendText(text, turnComplete = true) {
     if (!S) return false;
-    if (turnComplete) { stopPlayback(); S.lastText = text; S.amyText = ""; S.lastSendAt = performance.now(); S.firstAudioAt = 0; S.quiet = false; }
+    if (turnComplete) { stopPlayback(); S.lastText = text; S.amyText = ""; S.lastSendAt = performance.now(); S.firstAudioAt = 0; S.quiet = false; S.toolPending = false; }
     const msg = JSON.stringify({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete } });
     if (S.ready && S.ws && S.ws.readyState === 1) S.ws.send(msg); else S.queued.push(msg);
     return true;

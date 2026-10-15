@@ -117,7 +117,7 @@
 `;
 
   // server.py 的模型清單：前面的免費額度用完就換下一個
-  const LIVE_MODELS = ["models/gemini-3.1-flash-live-preview", "models/gemini-3.8-live",
+  const LIVE_MODELS = ["models/gemini-3.8-live", "models/gemini-3.1-flash-live-preview",
     "models/gemini-2.5-flash-native-audio-latest", "models/gemini-2.5-flash-native-audio-preview-12-2025"];
   const FAST_TEXT_MODELS = ["models/gemini-2.5-flash", "models/gemini-3-flash-preview", "models/gemini-flash-latest",
     "models/gemini-3.5-flash", "models/gemini-3.6-flash", "models/gemini-3.7-flash"];
@@ -1458,6 +1458,17 @@
     sp.addEventListener("pointerup", end); sp.addEventListener("pointercancel", end);
     sp.addEventListener("dblclick", () => { root.style.removeProperty("--side-w"); try { localStorage.removeItem(KEY); } catch (e) { /* 忽略 */ } dispatchEvent(new Event("resize")); });
   })();
+  // 🍅 番茄鐘：時間到用語音提醒（正在即時陪讀就請老師用它的個性講；否則用手機朗讀）
+  PeiduPomodoro.init({
+    button: $("#pomoBtn"), key: "peidu-phone-pomodoro",
+    toast: t => toast(t, 6000),
+    // iPhone 要在「按下去的當下」先念一次（空的），之後時間到才念得出來
+    unlock: () => { try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch (e) { /* 不支援 */ } },
+    speak: t => {
+      if (PeiduLive.isOn()) return PeiduLive.sendText(`（番茄鐘提醒：請用你的說話個性，用一兩句話提醒學生：${t}）`, true);
+      try { const u = new SpeechSynthesisUtterance(t); u.lang = "zh-TW"; u.rate = 0.95; speechSynthesis.speak(u); } catch (e) { /* 念不出來就只顯示文字 */ }
+    },
+  });
   makeHSplit($("#chatSplit"), $("#chatBox"), "peidu-phone-chatbox-h2" + (mqWide.matches ? "-wide" : ""), 64, 200);  // 手機、平板各記各的
 
   $("#chatBox").addEventListener("submit", e => {
