@@ -174,7 +174,7 @@
     const last = UNDO.stack[UNDO.stack.length - 1];
     if (!last) { bar.hidden = true; return; }
     $("#undoText").textContent = `🖍 老師標了：${last.text.slice(0, 18)}${last.text.length > 18 ? "…" : ""}` + (UNDO.stack.length > 1 ? `（共 ${UNDO.stack.length} 個）` : "");
-    bar.hidden = false;
+    bar.hidden = false; UNDO.reclamp && UNDO.reclamp();
     UNDO.t = setTimeout(() => { bar.hidden = true; UNDO.stack = []; }, 20000);
   }
   $("#undoBtn").onclick = async () => {
@@ -184,6 +184,35 @@
     paintUndo();
   };
   $("#undoClose").onclick = () => { clearTimeout(UNDO.t); UNDO.stack = []; $("#undoBar").hidden = true; };
+  // 復原提示條可以拖到別的地方（左邊 ⠿ 把手；位置記在這台裝置；點兩下把手回原位）
+  (() => {
+    const bar = document.getElementById("undoBar"), grip = bar.querySelector(".undo-grip"), KEY = "peidu-phone-undo-pos";
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(KEY)); } catch (e) { /* 沒存過 */ }
+    function place(p) {
+      if (!p) { bar.classList.remove("moved"); bar.style.left = bar.style.top = ""; return; }
+      bar.classList.add("moved");
+      const w = bar.offsetWidth || 260, h = bar.offsetHeight || 44;
+      bar.style.left = Math.max(4, Math.min(innerWidth - w - 4, p.x)) + "px";
+      bar.style.top = Math.max(4, Math.min(innerHeight - h - 4, p.y)) + "px";
+    }
+    UNDO.reclamp = () => { if (saved) place(saved); };  // 每次顯示時重新算一次，不會跑出畫面
+    let d = null;
+    grip.addEventListener("pointerdown", e => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const r = bar.getBoundingClientRect(); d = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+      grip.setPointerCapture(e.pointerId); e.preventDefault();
+    });
+    grip.addEventListener("pointermove", e => { if (d) place({ x: e.clientX - d.dx, y: e.clientY - d.dy }); });
+    const end = () => {
+      if (!d) return;
+      d = null; const r = bar.getBoundingClientRect(); saved = { x: r.left, y: r.top };
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) { /* 忽略 */ }
+    };
+    grip.addEventListener("pointerup", end); grip.addEventListener("pointercancel", end);
+    grip.addEventListener("dblclick", () => { saved = null; place(null); try { localStorage.removeItem(KEY); } catch (e) { /* 忽略 */ } });
+    addEventListener("resize", () => UNDO.reclamp());
+  })();
 
   function askConfirm(title, body, okLabel = "刪除") {
     return new Promise(resolve => {
