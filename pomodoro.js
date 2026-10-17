@@ -83,19 +83,20 @@
     function begin(phase) {
       st.phase = phase; st.endAt = Date.now() + (phase === "rest" ? st.rest : st.study) * 60000; save(); paint();
     }
-    function remind(text) {
+    function remind(text, info) {  // info：{kind: "study-end"|"rest-end", extra: 第幾種動一動}（手機版用來挑預錄的音檔）
       opts.toast && opts.toast(text);
-      if (st.voice && opts.speak) { try { opts.speak(text); } catch (e) { /* 念不出來就算了 */ } }
+      if (st.voice && opts.speak) { try { opts.speak(text, info || {}); } catch (e) { /* 念不出來就算了 */ } }
       if (navigator.vibrate) try { navigator.vibrate([200, 100, 200]); } catch (e) { /* 不支援 */ }
     }
     function tick() {
       if ((st.phase === "study" || st.phase === "rest") && Date.now() >= st.endAt) {
         if (st.phase === "study") {
           st.rounds++;
-          remind(`番茄時間到！你已經專心讀了 ${st.study} 分鐘，起來走一走、${pick(EXTRA)}，喝口水、上個廁所，休息 ${st.rest} 分鐘再回來。`);
+          const k = Math.floor(Math.random() * EXTRA.length);
+          remind(`番茄時間到！你已經專心讀了 ${st.study} 分鐘，起來走一走、${EXTRA[k]}，喝口水、上個廁所，休息 ${st.rest} 分鐘再回來。`, { kind: "study-end", extra: k });
           begin("rest");
         } else {
-          remind("休息結束，回來繼續讀書吧！");
+          remind("休息結束，回來繼續讀書吧！", { kind: "rest-end" });
           begin("study");
         }
       }

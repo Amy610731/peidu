@@ -1494,17 +1494,42 @@
     sp.addEventListener("pointerup", end); sp.addEventListener("pointercancel", end);
     sp.addEventListener("dblclick", () => { root.style.removeProperty("--side-w"); try { localStorage.removeItem(KEY); } catch (e) { /* 忽略 */ } dispatchEvent(new Event("resize")); });
   })();
-  // 🍅 番茄鐘：時間到用語音提醒（正在即時陪讀就請老師用它的個性講；否則用手機朗讀）
-  PeiduPomodoro.init({
+  // 🍅 番茄鐘：時間到用語音提醒（正在即時陪讀就請老師用它的個性講；否則播預錄的提醒音檔）
+  // iPhone／iPad 不准網頁「自己」開口（朗讀會被擋），所以：按開始的當下先把聲音解鎖，時間到再播預錄的音檔
+  const POMO = { ctx: null, bufs: {}, loading: null };
+  function pomoUnlock() {
+    try {
+      if (!POMO.ctx) POMO.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (POMO.ctx.state !== "running") POMO.ctx.resume();
+      const b = POMO.ctx.createBuffer(1, 1, 22050), s = POMO.ctx.createBufferSource();  // 播一下靜音，iOS 才算真的解鎖
+      s.buffer = b; s.connect(POMO.ctx.destination); s.start(0);
+    } catch (e) { /* 不支援就只顯示文字 */ }
+    if (!POMO.loading && POMO.ctx) {
+      POMO.loading = Promise.all(["study-end-0", "study-end-1", "study-end-2", "study-end-3", "rest-end"].map(async n => {
+        try { const ab = await (await fetch(`sounds/${n}.mp3?v=1`)).arrayBuffer(); POMO.bufs[n] = await POMO.ctx.decodeAudioData(ab); } catch (e) { /* 這個檔載不到就算了 */ }
+      }));
+    }
+  }
+  function pomoPlay(name) {
+    const c = POMO.ctx, b = POMO.bufs[name];
+    if (!c || !b) return false;
+    if (c.state !== "running") c.resume();
+    const s = c.createBufferSource(); s.buffer = b; s.connect(c.destination); s.start(0);
+    return true;
+  }
+  const pomo = PeiduPomodoro.init({
     button: $("#pomoBtn"), key: "peidu-phone-pomodoro",
     toast: t => toast(t, 6000),
-    // iPhone 要在「按下去的當下」先念一次（空的），之後時間到才念得出來
-    unlock: () => { try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch (e) { /* 不支援 */ } },
-    speak: t => {
+    unlock: pomoUnlock,
+    speak: (t, info) => {
       if (PeiduLive.isOn()) return PeiduLive.sendText(`（番茄鐘提醒：請用你的說話個性，用一兩句話提醒學生：${t}）`, true);
+      const name = info.kind === "rest-end" ? "rest-end" : info.kind === "study-end" ? `study-end-${info.extra || 0}` : "";
+      if (name && pomoPlay(name)) return;
       try { const u = new SpeechSynthesisUtterance(t); u.lang = "zh-TW"; u.rate = 0.95; speechSynthesis.speak(u); } catch (e) { /* 念不出來就只顯示文字 */ }
     },
   });
+  // 重新整理後番茄鐘還在倒數、但聲音還沒解鎖：碰一下畫面任何地方就解鎖
+  document.addEventListener("pointerdown", () => { const st = pomo.state(); if (st.phase !== "idle" && (!POMO.ctx || POMO.ctx.state !== "running")) pomoUnlock(); }, { capture: true, passive: true });
   makeHSplit($("#chatSplit"), $("#chatBox"), "peidu-phone-chatbox-h2" + (mqWide.matches ? "-wide" : ""), 64, 200);  // 手機、平板各記各的
 
   $("#chatBox").addEventListener("submit", e => {

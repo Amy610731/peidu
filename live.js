@@ -302,7 +302,9 @@
       if (d.goAway) { status("reconnecting"); return; }  // 快到時間上限，等它關掉再自動重連
       if (d.toolCall) {  // 老師要查資料／畫重點
         const calls = d.toolCall.functionCalls || [];
-        if ((S.turnOut || 0) > 15) S.quiet = true;  // 答案已經講完才叫工具 → 工具結果回來後多講的都不放
+        // 答案講到一半叫工具（畫重點）：3.8 的聲音還會繼續傳好幾秒，不能這時就擋（會把話切掉），等這一輪結束才安靜；
+        // 3.1 收到工具結果後常在同一輪「再講一次」，所以 3.1 維持一叫工具就擋
+        if ((S.turnOut || 0) > 15) { if (/3\.1/.test(S.model || "")) S.quiet = true; }
         else S.toolPending = true;  // 還沒回答就先叫工具（例如先查資料）→ 答案在後面，要等它講
         const prev = S.lastStatus;
         if (calls.some(fc => fc.name === "lookup")) status("looking");
