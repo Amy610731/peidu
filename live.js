@@ -290,7 +290,6 @@
       ...tools(),
       // 斷句：停多久算講完（設定裡的「反應速度」）。0.3 秒會把一句話切成兩半，所以最短 0.5 秒
       realtimeInputConfig: { automaticActivityDetection: {
-        startOfSpeechSensitivity: "START_SENSITIVITY_LOW",  // 回音、雜音不容易被當成她在插話
         endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
         silenceDurationMs: S.opts.silenceMs || 500, prefixPaddingMs: 300 } },  // 保留開口前 0.3 秒，句首才不會被吃掉
     } }));
@@ -305,7 +304,7 @@
         const calls = d.toolCall.functionCalls || [];
         // 答案講到一半叫工具（畫重點）：3.8 的聲音還會繼續傳好幾秒，不能這時就擋（會把話切掉），等這一輪結束才安靜；
         // 3.1 收到工具結果後常在同一輪「再講一次」，所以 3.1 維持一叫工具就擋
-        if ((S.turnOut || 0) > 15) { if (/3\.1/.test(S.model || "")) S.quiet = true; }
+        if ((S.turnOut || 0) > 15) { if (/3\.1/.test(S.model || "")) { S.quiet = true; S.quietUntil = performance.now() + 6000; } }
         else S.toolPending = true;  // 還沒回答就先叫工具（例如先查資料）→ 答案在後面，要等它講
         const prev = S.lastStatus;
         if (calls.some(fc => fc.name === "lookup")) status("looking");
@@ -330,7 +329,9 @@
       // 她開口（插話／有字幕）＝新的一輪
       if (sc.inputTranscription && sc.inputTranscription.text) S.resumeCount = 0;
       if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; S.toolPending = false; }
-      // 講完之後沒人問、模型卻自己又講（畫完重點再講一次、自己跳下一題）→ 不放、不記
+      // 講完之後沒人問、模型卻自己又講（畫完重點再講一次、自己跳下一題）→ 不放、不記。
+      // 只擋講完後的幾秒（實測自言自語都在 1.3 秒內冒出來）；她的字幕 3.8 常常很晚才到，擋太久會把她下一題的回答吃掉
+      if (S.quiet && performance.now() > (S.quietUntil || 0)) S.quiet = false;
       if (S.quiet) { if (sc.turnComplete) { S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; } return; }
       if (sc.interrupted) { stopPlayback(); status("listening"); armFalseInterrupt(); }  // 插話 → 老師馬上閉嘴
       if (sc.inputTranscription && sc.inputTranscription.text) {
@@ -371,7 +372,7 @@
         const said = (S.turnOut || 0) > 0;
         flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false;
         // 3.8 叫完工具會先結束一輪、下一輪才講答案 → 還沒講到答案就不要安靜
-        if (S.toolPending && !said) { /* 等答案 */ } else { S.toolPending = false; S.quiet = true; }
+        if (S.toolPending && !said) { /* 等答案 */ } else { S.toolPending = false; S.quiet = true; S.quietUntil = performance.now() + 4000; }
       }
     };
     ws.onclose = e => {
