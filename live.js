@@ -290,6 +290,7 @@
       ...tools(),
       // 斷句：停多久算講完（設定裡的「反應速度」）。0.3 秒會把一句話切成兩半，所以最短 0.5 秒
       realtimeInputConfig: { automaticActivityDetection: {
+        startOfSpeechSensitivity: "START_SENSITIVITY_LOW",  // 回音、雜音不容易被當成她在插話
         endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
         silenceDurationMs: S.opts.silenceMs || 500, prefixPaddingMs: 300 } },  // 保留開口前 0.3 秒，句首才不會被吃掉
     } }));
@@ -327,10 +328,11 @@
       const sc = d.serverContent;
       if (!sc) return;
       // 她開口（插話／有字幕）＝新的一輪
+      if (sc.inputTranscription && sc.inputTranscription.text) S.resumeCount = 0;
       if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; S.toolPending = false; }
       // 講完之後沒人問、模型卻自己又講（畫完重點再講一次、自己跳下一題）→ 不放、不記
       if (S.quiet) { if (sc.turnComplete) { S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; } return; }
-      if (sc.interrupted) { stopPlayback(); status("listening"); }  // 插話 → 老師馬上閉嘴
+      if (sc.interrupted) { stopPlayback(); status("listening"); armFalseInterrupt(); }  // 插話 → 老師馬上閉嘴
       if (sc.inputTranscription && sc.inputTranscription.text) {
         if (ttsOn() && S.sources.size) stopPlayback();  // 童音還在念、她開口了 → 停下來聽她說
         S.amyText += sc.inputTranscription.text;
@@ -400,7 +402,25 @@
     for (let i = 0; i < samples.length; i++) { const v = samples[i] * scale; e += v * v; }
     const loud = Math.sqrt(e / Math.max(1, samples.length)) > 0.03;
     S.loudMs = loud ? (S.loudMs || 0) + samples.length / rate * 1000 : 0;
-    if (S.loudMs >= 250) S.quiet = false;
+    if (S.loudMs >= 250) { S.quiet = false; S.loudSeen = true; }
+  }
+
+  // 老師被「打斷」了，但 1.5 秒內她沒有講話（沒有字幕、麥克風不大聲）＝喇叭回音或雜音誤判 → 請老師接著講完
+  function armFalseInterrupt() {
+    if (!S) return;
+    if (performance.now() - (S.sentAt || 0) < 2500) return;  // 剛送出問題／補講要求造成的中斷，不算誤判（不然會一直補）
+    const mine = S, amyLen = S.amyText.length;
+    S.loudSeen = false;
+    clearTimeout(S.resumeT);
+    S.resumeT = setTimeout(() => {
+      if (S !== mine || !S.ready) return;
+      if (S.amyText.length > amyLen || S.loudSeen) return;  // 她真的開口了
+      if ((S.resumeCount || 0) >= 2) return;                 // 一直被打斷就不硬補，免得沒完沒了
+      S.resumeCount = (S.resumeCount || 0) + 1;
+      const keep = S.resumeCount;
+      sendText("（剛剛被雜音打斷了，學生其實沒有說話。請從你剛剛中斷的地方接著把話講完，不要從頭重講，也不要提到被打斷。）", true);
+      S.resumeCount = keep;  // sendText 不該把次數歸零
+    }, 1500);
   }
 
   function fail(err) {
@@ -528,6 +548,7 @@
   // 傳一段文字給老師：turnComplete=true 表示「請回答」；false＝只是補充資料（例如翻頁了）
   function sendText(text, turnComplete = true) {
     if (!S) return false;
+    if (turnComplete) S.sentAt = performance.now();
     if (turnComplete) { stopPlayback(); S.lastText = text; S.amyText = ""; S.lastSendAt = performance.now(); S.firstAudioAt = 0; S.quiet = false; S.toolPending = false; }
     const msg = JSON.stringify({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete } });
     if (S.ready && S.ws && S.ws.readyState === 1) S.ws.send(msg); else S.queued.push(msg);
