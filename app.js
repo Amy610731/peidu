@@ -345,11 +345,11 @@
     MODELS.list = j.models || []; MODELS.at = Date.now();
     return MODELS.list;
   }
-  const exhausted = kind => LS.get("peidu-phone-ex-" + kind, {});
+  const exhausted = kind => LS.get("peidu-phone-ex2-" + kind, {});
   function markExhausted(kind, model, sec) {
     const m = exhausted(kind); m[model] = Date.now() + sec * 1000;
     for (const k in m) if (m[k] < Date.now()) delete m[k];
-    LS.set("peidu-phone-ex-" + kind, m);
+    LS.set("peidu-phone-ex2-" + kind, m);
   }
   async function pickLiveModel(key) {
     const list = await listModels(key);

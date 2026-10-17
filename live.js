@@ -327,7 +327,7 @@
       const sc = d.serverContent;
       if (!sc) return;
       // 她開口（插話／有字幕）＝新的一輪
-      if (sc.inputTranscription && sc.inputTranscription.text) S.resumeCount = 0;
+      if (sc.inputTranscription && sc.inputTranscription.text) { S.resumeCount = 0; S.lastAskAt = performance.now(); }
       if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; S.toolPending = false; }
       // 講完之後沒人問、模型卻自己又講（畫完重點再講一次、自己跳下一題）→ 不放、不記。
       // 只擋講完後的幾秒（實測自言自語都在 1.3 秒內冒出來）；她的字幕 3.8 常常很晚才到，擋太久會把她下一題的回答吃掉
@@ -359,7 +359,10 @@
         }
       }
       // 有字幕卻沒聲音＝這個模型今天的免費語音額度用完了（Google 不會報錯），讓外面換模型重問
-      if ((sc.generationComplete || sc.turnComplete) && S.turnOut > 0 && !S.turnAudio && !S.noAudioFired && S.opts.onNoAudio) {
+      // 只有「真的在回答她的問題」才算：背景通知（翻頁）的回覆、括號開頭的旁白、很短的字，都不是額度用完（2026-10-17 誤判過，把模型全標成用完）
+      const outText = (S.claudeText || "").trim();
+      const realAnswer = outText.length >= 8 && !/^[（(]/.test(outText) && (S.lastAskAt || 0) >= (S.lastNoticeAt || 0);
+      if ((sc.generationComplete || sc.turnComplete) && S.turnOut > 0 && !S.turnAudio && !S.noAudioFired && realAnswer && S.opts.onNoAudio) {
         S.noAudioFired = true;
         const info = { model: S.model, amy: S.amyText.trim() || S.lastText || S.lastAmy || "" };
         setTimeout(() => S && S.opts.onNoAudio(info));
@@ -549,7 +552,7 @@
   // 傳一段文字給老師：turnComplete=true 表示「請回答」；false＝只是補充資料（例如翻頁了）
   function sendText(text, turnComplete = true) {
     if (!S) return false;
-    if (turnComplete) S.sentAt = performance.now();
+    if (turnComplete) { S.sentAt = performance.now(); S.lastAskAt = S.sentAt; } else S.lastNoticeAt = performance.now();
     if (turnComplete) { stopPlayback(); S.lastText = text; S.amyText = ""; S.lastSendAt = performance.now(); S.firstAudioAt = 0; S.quiet = false; S.toolPending = false; }
     const msg = JSON.stringify({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete } });
     if (S.ready && S.ws && S.ws.readyState === 1) S.ws.send(msg); else S.queued.push(msg);
