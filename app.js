@@ -632,6 +632,7 @@
   function starTopicText(t) {
     const L = [];
     L.push(`【考點】${t.title}（${[t.sectionName, t.chapter].filter(Boolean).join("｜")}）`);
+    if (t.focusQi != null && t.quiz[t.focusQi]) L.push(`【她現在畫面上正在做的是第 ${t.focusQi + 1} 題${t.notebook ? "（錯題本重做：這題她之前答錯過）" : ""}。她說「考我」「這題」就是這一題。】`);
     L.push(t.examHits ? `官方公告試題考過 ${t.examHits} 次（${(t.examRefs || []).join("、")}）` : "官方公告試題還沒考過這個考點");
     if (t.summary) L.push(`白話說明：${t.summary}`);
     if (t.keyPoints.length) L.push("重點：" + t.keyPoints.map((k, i) => `${i + 1}. ${k}`).join(" "));
@@ -654,7 +655,8 @@
     if (!raw || typeof raw !== "object" || typeof raw.title !== "string") return null;
     const arr = (a, n, f) => (Array.isArray(a) ? a.slice(0, n).map(f) : []);
     return {
-      id: clip(raw.id, 40), title: clip(raw.title, 60), sectionName: clip(raw.sectionName, 60), chapter: clip(raw.chapter, 60),
+      id: clip(raw.id, 40), title: clip(raw.title, 60), notebook: !!raw.notebook,
+      focusQi: Number.isInteger(raw.focusQi) && raw.focusQi >= 0 && raw.focusQi < 8 ? raw.focusQi : null, sectionName: clip(raw.sectionName, 60), chapter: clip(raw.chapter, 60),
       examHits: +raw.examHits || 0, examRefs: arr(raw.examRefs, 6, x => clip(x, 30)),
       summary: clip(raw.summary, 900), keyPoints: arr(raw.keyPoints, 8, x => clip(x, 300)), trap: clip(raw.trap, 400),
       related: arr(raw.related, 5, r => ({ title: clip(r && r.title, 40), why: clip(r && r.why, 120) })),
@@ -665,9 +667,16 @@
   }
   // 點了新考點／回到總覽：連線中就偷偷告訴老師（不要它回應）；沒連線的話，下次連線時 getConfig 會帶進去
   function starSetTopic(t) {
-    S.topic = t; STAR.answers = {};
+    const same = t && S.topic && S.topic.id === t.id;  // 同一個考點只是換題（錯題本重做）：只通知換到第幾題，不重送整份資料
+    S.topic = t; if (!same) STAR.answers = {};
     clearTimeout(STAR.t);
     if (!PeiduLive.isOn()) return;
+    if (same && t.focusQi != null) {
+      STAR.t = setTimeout(() => {
+        if (PeiduLive.isOn() && S.star) PeiduLive.sendText(`（這則不用回應，只是讓你知道：學生畫面上換到「${t.title}」的第 ${t.focusQi + 1} 題${t.notebook ? "（錯題本重做，這題她之前答錯過）" : ""}，她說「考我」「這題」就是這一題。）`, false);
+      }, 500);
+      return;
+    }
     STAR.t = setTimeout(() => {
       if (!PeiduLive.isOn() || !S.star) return;
       PeiduLive.sendText(t
@@ -700,6 +709,7 @@
 你的任務是用口頭問答幫她練習和複習：
 - 她說「考我」「出題」「開始」「下一題」時，從目前考點的練習題挑一題（照順序；她指定第幾題就照她說的），用口語把題幹和每個選項念給她聽，念完停下來等她回答。出題這一段可以不受「120 字以內」的限制，但選項要念清楚、不要念出標點符號；題幹太長、有程式碼或公式時，用口語簡述重點，並說「完整題目在畫面上」。
 - 她回答之前，絕對不能先講答案，也不能暗示答案。她回答之後：答對了，用一兩句講為什麼對，順便點出最容易混淆的那個選項；答錯了，先不要公佈答案，用你自己的話給一個提示引導她再想一次（資料裡的提示只是參考，不要照念，更不要把它當成答案念出來）；她說「不知道」「直接告訴我」，或第二次還答錯，才公佈正確答案並講解。
+- 如果資料裡寫了「她現在畫面上正在做的是第 N 題」，她說「考我」「這題」就出那一題，不要自己換題；那是她的錯題本（之前答錯的題目），答錯時多一點耐心，引導她想通為什麼錯。
 - 一次只出一題。講完等她說要不要下一題，不要自己連續出題，也不要她沒說話就開始考。
 - 她問概念（「這是什麼意思」「為什麼」「跟某某差在哪」）就用考點資料回答：先白話、再講考試陷阱；資料沒寫的觀念用你自己的知識補充。
 - 收到「（這則不用回應…）」開頭、說她在畫面上點了別的考點或作答的訊息，不要出聲，只要記住：之後以最新的考點為準；她在畫面上作答的結果算她已經回答過那一題，她問「我答對了嗎」就照結果回答。
