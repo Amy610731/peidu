@@ -664,8 +664,29 @@
     para(url, [9, .45, .45, .45], M, false, 0);
     para("加入日期：" + new Date().toLocaleDateString("zh-TW"), [9, .45, .45, .45], M, false, 6);
     page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: .6, color: rgb(.8, .78, .74) }); y -= 6;
+    // 附圖：透過 wsrv.nl 轉成 JPG（原網站不給別的網站直接讀圖，PDF 也不能放 webp）；同一張圖只放一份
+    const imgs = new Map();
+    await Promise.all([...new Set(blocks.filter(b => b.t === "img").map(b => b.url))].map(async u => {
+      try {
+        const r = await fetch(`https://wsrv.nl/?url=${encodeURIComponent(u.replace(/^https?:\/\//, ""))}&output=jpg&q=85&w=1400`);
+        if (r.ok) imgs.set(u, await pdf.embedJpg(new Uint8Array(await r.arrayBuffer())));
+      } catch { /* 沒載到：下面放一行提示 */ }
+    }));
     for (const b of blocks) {
       if (cut) break;
+      if (b.t === "pagebreak") { newPage(); continue; }
+      if (b.t === "img") {
+        const im = imgs.get(b.url);
+        if (!im) { para("（附圖沒載到，請到原網站看）", [10.5, .6, .3, .1], M); continue; }
+        const x0 = M + (b.ind || 0), s = Math.min((W - M - x0) / im.width, (H - 2 * M) / im.height, .5);
+        const w = im.width * s, h = im.height * s;
+        if (y - h - 8 < M && !newPage()) break;
+        y -= h + 4; page.drawImage(im, { x: x0, y, width: w, height: h }); y -= 4;
+        continue;
+      }
+      if (b.t === "opt") { para(b.s, ST.li, M + 8); continue; }
+      if (b.t === "ans") { para(b.s, [13, .08, .45, .22], M, true, 2); continue; }
+      if (b.t === "small") { para(b.s, [10.5, .45, .45, .45], M); continue; }
       if (b.t === "gap") { y -= 5; continue; }
       if (b.t === "hr") { y -= 6; if (y < M + 10) newPage(); else { page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: .5, color: rgb(.85, .83, .8) }); y -= 6; } continue; }
       if (b.t === "h") { if (y < M + 80) newPage(); y -= 6; para(b.s, ST["h" + Math.min(3, b.lv)], M, true, 3); continue; }
@@ -681,11 +702,90 @@
     if (cut) para(`（網頁太長，只收前 ${MAXP} 頁）`, [11, .6, .3, .1], M);
     return { bytes: await pdf.save(), pages: pdf.getPageCount() };
   }
+  // ---------- 資安考題練習網站：整份考卷（題目＋選項＋答案＋詳解）排成一份講義 ----------
+  // 網站的考卷清單在 manifest.json、每份考卷一個 data/*.json；它不給別的網站直接讀 → 先直接試，不行再透過 Jina Reader
+  const QUIZ_HOST = "ipas-quiz.hiiii-lin.workers.dev";
+  async function quizJSON(url) {
+    try { const r = await fetch(url, { cache: "no-cache" }); if (r.ok) return await r.json(); } catch { /* 被擋：改走 Jina */ }
+    const r = await fetch("https://r.jina.ai/" + url);
+    if (!r.ok) throw new Error("QUIZ");
+    const raw = await r.text(), i = raw.indexOf("Markdown Content:");
+    return JSON.parse((i >= 0 ? raw.slice(i + 17) : raw).trim().replace(/^```(?:json)?\s*|\s*```$/g, ""));
+  }
+  const quizTitle = p => p.title || `${p.year} 年第 ${p.term} 次・${p.subject_name}`;
+  async function openQuizPicker(origin) {
+    setUploading("正在讀考卷清單…");
+    let man;
+    try { man = await quizJSON(origin + "/manifest.json"); }
+    catch { return toast("考卷清單讀不到，等一下再試", 5000); }
+    finally { setUploading(""); }
+    const list = $("#quizList"); list.innerHTML = "";
+    for (const lv of man.levels || []) {
+      const h = document.createElement("h3"); h.textContent = lv.name; list.appendChild(h);
+      const papers = [...(lv.papers || [])].sort((a, b) => ((a.kind === "sample") - (b.kind === "sample")) || (b.year - a.year) || (a.term - b.term) || String(a.subject).localeCompare(b.subject));  // 新的考古題在前、樣題放最後
+      for (const p of papers) {
+        const b = document.createElement("button"); b.type = "button"; b.className = "quiz-paper";
+        b.innerHTML = `<span class="nm"></span><span class="mt"></span>`;
+        b.querySelector(".nm").textContent = quizTitle(p);
+        b.querySelector(".mt").textContent = `${p.count} 題` + (p.exam_date ? "・" + p.exam_date : "") + (p.has_figure ? "・有附圖" : "") + (p.has_explanation ? "・有詳解" : "");
+        b.onclick = () => { $("#quizBox").hidden = true; importQuiz(origin, lv.name, p, $("#quizAnsEnd").checked); };
+        list.appendChild(b);
+      }
+    }
+    $("#quizBox").hidden = false;
+  }
+  function quizBlocks(origin, paper, ansEnd) {
+    const B = [], END = [];
+    const ansText = q => (q.answers && q.answers.length > 1 ? q.answers.map(a => a.join("")).join(" 或 ") : (q.answer || []).join(""));
+    const STATUS = { corrected: "（官方更正答案）", bonus: "（送分）" };
+    let lastFigs = "";
+    for (const q of paper.questions || []) {
+      B.push({ t: "h", lv: 3, s: `第 ${q.no} 題` + (q.type === "multi" ? "（複選）" : "") });
+      for (const ln of String(q.stem || "").split(/\n+/)) if (ln.trim()) B.push({ t: "p", s: ln.trim() });
+      const figs = (q.figures || []).join(",");
+      if (figs && figs === lastFigs) B.push({ t: "small", s: "（附圖同上一題）" });
+      else for (const f of q.figures || []) B.push({ t: "img", url: `${origin}/img/${f}` });
+      lastFigs = figs;
+      const opts = q.options || {}, of = q.option_figures || {};
+      for (const k of [...new Set([...Object.keys(opts), ...Object.keys(of)])].sort()) {
+        B.push({ t: "opt", s: `(${k}) ${opts[k] == null ? "" : String(opts[k]).trim()}` });
+        if (of[k]) B.push({ t: "img", url: `${origin}/img/${of[k]}`, ind: 18 });
+      }
+      const ex = q.explanation, exText = typeof ex === "string" ? ex : ex ? (ex.teacher_note || ex.body || "") : "";
+      const a = [{ t: "ans", s: `答案：${ansText(q) || "（官方未公布）"}${STATUS[q.status] || ""}` }];
+      if (q.note) a.push({ t: "small", s: "備註：" + q.note });
+      if (exText) a.push({ t: "q", s: exText });
+      if (ansEnd) END.push({ t: "h", lv: 3, s: `第 ${q.no} 題` }, ...a); else B.push(...a);
+      B.push({ t: "gap" });
+    }
+    if (ansEnd) B.push({ t: "pagebreak" }, { t: "h", lv: 1, s: "答案與詳解" }, ...END);
+    return B;
+  }
+  async function importQuiz(origin, lvName, paper, ansEnd) {
+    if (!PDFJS_OK) return toast("PDF 元件沒有載入成功，請重新整理（要有網路）");
+    try {
+      setUploading("正在下載考卷…");
+      const data = await quizJSON(`${origin}/${paper.file}`);
+      const title = `${lvName}｜${quizTitle(paper)}`;
+      setUploading(webFontP ? "正在排成講義…" : "正在排成講義（第一次要下載中文字型，約 7MB）…");
+      const { bytes } = await makeWebPdf(title, `${origin}/　資料來源：資安考題練習・${data.source || paper.kind || ""}`, quizBlocks(origin, data, ansEnd));
+      setUploading("");
+      await addPdf(new File([bytes], title.replace(/[\\/:*?"<>|｜]/g, "_").slice(0, 60) + (ansEnd ? "（答案在後）" : "") + ".pdf", { type: "application/pdf" }));
+    } catch (e) {
+      console.warn(e);
+      toast(e && e.message === "LIB" ? "排版元件下載失敗，確認有網路再試一次"
+        : e && e.message === "FONT" ? "中文字型下載失敗，確認有網路再試一次" : "考卷下載失敗，等一下再試", 5000);
+    } finally { setUploading(""); }
+  }
+  $("#quizCancel").onclick = () => { $("#quizBox").hidden = true; };
+  $("#quizBox").addEventListener("click", e => { if (e.target.id === "quizBox") $("#quizBox").hidden = true; });
+
   async function addWebPage(input) {
     const raw = ((input || "").match(/https?:\/\/[^\s<>"']+/i) || [(input || "").trim()])[0];
     let url;
     try { url = new URL(/^https?:\/\//i.test(raw) ? raw : "https://" + raw); if (!/\./.test(url.hostname)) throw 0; }
     catch { return toast("這不像網址，請貼上 https:// 開頭的網址"); }
+    if (url.hostname === QUIZ_HOST) return openQuizPicker(url.origin);  // 考題網站：選考卷，整份排成一份
     if (!PDFJS_OK) return toast("PDF 元件沒有載入成功，請重新整理（要有網路）");
     try {
       setUploading("正在讀網頁…");
