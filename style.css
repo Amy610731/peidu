@@ -405,3 +405,7 @@ details.md-box textarea { width: 100%; min-height: 200px; font: 13px/1.5 ui-mono
 .quiz-paper { text-align: left; display: flex; flex-direction: column; gap: 2px; min-height: 48px; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 12px; background: var(--panel-2); color: var(--ink); cursor: pointer; }
 .quiz-paper .nm { font-weight: 700; font-size: 15px; }
 .quiz-paper .mt { font-size: 12.5px; color: var(--ink-soft); }
+
+/* 深色講義（網頁／考卷的深色版）：螢光筆用濾色，黑底上才看得到、白字不會變暗 */
+#reader.dark-doc .hl { mix-blend-mode: screen; opacity: .45; }
+#reader.dark-doc .hl.box { mix-blend-mode: normal; opacity: .9; }

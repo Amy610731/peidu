@@ -494,7 +494,7 @@
   $("#shelfSettings").onclick = () => openSettings();
 
   function setUploading(text) { $("#uploading").hidden = !text; if (text) $("#uploadingText").textContent = text; $("#addBtn").disabled = !!text; const ub = $("#urlBtn"); if (ub) ub.disabled = !!text; }
-  async function addPdf(file) {
+  async function addPdf(file, extra = {}) {
     if (!PDFJS_OK) return toast("PDF 元件沒有載入成功，請重新整理（要有網路）");
     if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") return toast("只能加入 PDF 檔");
     if (file.size > MAX_BYTES) return toast(`這個檔案 ${(file.size / 1048576).toFixed(0)}MB，太大了。先在電腦把 PDF 拆小一點。`, 5000);
@@ -505,7 +505,7 @@
       const pageCount = pdf.numPages; pdf.destroy();
       setUploading("正在存進手機…");
       const id = uid(), t = nowISO();
-      const doc = { id, name: file.name, size: file.size, pageCount, lastPage: 1, createdAt: t, updatedAt: t };
+      const doc = { id, name: file.name, size: file.size, pageCount, lastPage: 1, createdAt: t, updatedAt: t, ...extra };
       await dbPut("files", { id, data: buf });
       await dbPut("docs", doc);
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
@@ -592,7 +592,7 @@
       line = line.replace(/!\[[^\]]*\]\((?:[^()]|\([^)]*\))*\)/g, "")
         .replace(/\[\[[^\]]*\]\]\((?:[^()]|\([^)]*\))*\)/g, "")  // 維基的註腳 [[1]](網址)
         .replace(/\[([^\]]*)\]\((?:[^()]|\([^)]*\))*\)/g, "$1").replace(/\[編輯\]/g, "")
-        .replace(/<[^>]+>/g, "").replace(/\*\*|__|`/g, "").replace(/\t/g, "  ").replace(/ /g, " ");
+        .replace(/<[^>]+>/g, "").replace(/__|`/g, "").replace(/\t/g, "  ").replace(/ /g, " ");
       const prev = out[out.length - 1];
       let m;
       if (!line.trim()) { if (prev && prev.t !== "gap") out.push({ t: "gap" }); continue; }
@@ -611,7 +611,8 @@
     return out;
   }
   // 排成適合手機看的窄頁 PDF（字是真的文字，搜尋、畫重點、老師讀頁面都照常）
-  async function makeWebPdf(title, url, blocks) {
+  // opts.dark：黑底白字；網頁裡的 **粗體** 當成重點 → 彩色＋加粗；標題用藍色、答案用綠色
+  async function makeWebPdf(title, url, blocks, opts = {}) {
     await loadWebLibs();
     const fontBytes = await loadWebFont();
     const { PDFDocument, rgb, pushGraphicsState, popGraphicsState, setTextRenderingMode, TextRenderingMode, setLineWidth, setStrokingRgbColor } = PDFLib;
@@ -622,48 +623,80 @@
     const has = new Set(font.getCharacterSet());
     const clean = s => [...s].filter(c => c === " " || has.has(c.codePointAt(0))).join("");  // 字型沒有的字（emoji 等）拿掉，免得排版壞掉
     const W = 420, H = 594, M = 30, MAXP = 300;
-    const ST = { p: [13, .18, .17, .15], li: [13, .18, .17, .15], q: [12.5, .35, .33, .3], code: [11, .3, .3, .3], h1: [20, .1, .1, .1], h2: [17, .12, .12, .12], h3: [15, .14, .14, .14] };
+    const PAL = opts.dark ? {
+      bg: [.11, .11, .125], p: [.89, .89, .87], li: [.89, .89, .87], q: [.72, .72, .7], code: [.78, .78, .75],
+      h1: [1, 1, 1], h2: [.62, .8, 1], h3: [.62, .8, 1], small: [.62, .62, .6], ans: [.45, .86, .56], warn: [1, .6, .45],
+      emph: [1, .8, .32], rule: [.32, .32, .34], bar: [.55, .45, .25],
+    } : {
+      bg: null, p: [.18, .17, .15], li: [.18, .17, .15], q: [.35, .33, .3], code: [.3, .3, .3],
+      h1: [.1, .1, .1], h2: [.12, .3, .6], h3: [.12, .3, .6], small: [.45, .45, .45], ans: [.08, .45, .22], warn: [.6, .3, .1],
+      emph: [.78, .3, .04], rule: [.8, .78, .74], bar: [.85, .8, .72],
+    };
+    const SZ = { p: 13, li: 13, q: 12.5, code: 11, h1: 20, h2: 17, h3: 15, small: 10.5, ans: 13, url: 9 };
     const wcache = new Map();
     const wid = (s, size) => { const k = size + s; let w = wcache.get(k); if (w === undefined) { w = font.widthOfTextAtSize(s, size); wcache.set(k, w); } return w; };
     const NO_START = "，。、；：！？）」』】》,.;:!?)]}%";
-    function wrap(text, size, maxW) {
-      const toks = text.match(/[\x21-\x7eÀ-ɏ]+|\s+|[^]/gu) || [];
-      const lines = []; let cur = "", cw = 0;
-      for (const tk of toks) {
+    const TOK = /[\x21-\x7eÀ-ɏ]+|\s+|[^]/gu;
+    // **粗體** → 重點段落（星號沒有成對就當一般字）
+    function runsOf(text) {
+      const parts = clean(text).split("**");
+      if (parts.length % 2 === 0) return [{ s: parts.join("**"), em: false }];
+      return parts.map((s, i) => ({ s, em: i % 2 === 1 })).filter(r => r.s);
+    }
+    // 換行：回傳每一行的段落清單 [{s, em}]
+    function wrap(rs, size, maxW) {
+      const lines = []; let cur = [], cw = 0;
+      const push = () => {
+        while (cur.length && !cur[cur.length - 1].s.trim()) cur.pop();
+        if (cur.length) cur[cur.length - 1].s = cur[cur.length - 1].s.replace(/\s+$/, "");
+        if (cur.length) lines.push(cur);
+        cur = []; cw = 0;
+      };
+      const add = (s, em, w) => { const l = cur[cur.length - 1]; if (l && l.em === em) l.s += s; else cur.push({ s, em }); cw += w; };
+      for (const r of rs) for (const tk of r.s.match(TOK) || []) {
+        if (!cur.length && /^\s+$/.test(tk)) continue;
         const w = wid(tk, size);
-        if (cw + w <= maxW || (cur && tk.length === 1 && NO_START.includes(tk))) { cur += tk; cw += w; continue; }
-        if (/^\s+$/.test(tk)) { lines.push(cur); cur = ""; cw = 0; continue; }
-        if (cur.trim()) lines.push(cur);
-        cur = ""; cw = 0;
-        if (w <= maxW) { cur = tk; cw = w; continue; }
-        for (const ch of tk) { const cwid = wid(ch, size); if (cw + cwid > maxW && cur) { lines.push(cur); cur = ""; cw = 0; } cur += ch; cw += cwid; }  // 超長網址：硬切
+        if (cw + w <= maxW || (cur.length && tk.length === 1 && NO_START.includes(tk))) { add(tk, r.em, w); continue; }
+        if (/^\s+$/.test(tk)) { push(); continue; }
+        push();
+        if (w <= maxW) { add(tk, r.em, w); continue; }
+        for (const ch of tk) { const c = wid(ch, size); if (cw + c > maxW && cur.length) push(); add(ch, r.em, c); }  // 超長網址：硬切
       }
-      if (cur.trim()) lines.push(cur);
-      return lines.map(l => l.replace(/\s+$/, ""));
+      push();
+      return lines;
     }
     let page = null, y = 0, cut = false;
-    const newPage = () => { if (pdf.getPageCount() >= MAXP) { cut = true; return false; } page = pdf.addPage([W, H]); y = H - M; return true; };
+    const newPage = () => {
+      if (pdf.getPageCount() >= MAXP) { cut = true; return false; }
+      page = pdf.addPage([W, H]); y = H - M;
+      if (PAL.bg) page.drawRectangle({ x: 0, y: 0, width: W, height: H, color: rgb(...PAL.bg) });
+      return true;
+    };
     newPage();
-    function line(text, size, x, color, bold) {
+    function line(segs, size, x, color, bold) {
       const lh = size * 1.62;
       if (y - lh < M - 4 && !newPage()) return false;
       y -= lh;
-      if (bold) page.pushOperators(pushGraphicsState(), setTextRenderingMode(TextRenderingMode.FillAndOutline), setLineWidth(size * 0.03), setStrokingRgbColor(...color));
-      page.drawText(text, { x, y: y + size * 0.3, size, font, color: rgb(...color) });
-      if (bold) page.pushOperators(popGraphicsState());
+      for (const sg of segs) {
+        const c = sg.em ? PAL.emph : color, b = bold || sg.em;
+        if (b) page.pushOperators(pushGraphicsState(), setTextRenderingMode(TextRenderingMode.FillAndOutline), setLineWidth(size * 0.03), setStrokingRgbColor(...c));
+        page.drawText(sg.s, { x, y: y + size * 0.3, size, font, color: rgb(...c) });
+        if (b) page.pushOperators(popGraphicsState());
+        x += wid(sg.s, size);
+      }
       return true;
     }
-    function para(text, st, x0, bold, extra = 0) {
-      const [size, ...color] = st;
-      for (const ln of wrap(clean(text), size, W - M - x0)) if (!line(ln, size, x0, color, bold)) return false;
+    function para(text, key, x0, bold, extra = 0, color) {
+      const size = SZ[key] || SZ.p;
+      for (const ln of wrap(runsOf(text), size, W - M - x0)) if (!line(ln, size, x0, color || PAL[key] || PAL.small, bold)) return false;
       y -= extra;
       return true;
     }
     // 第一頁抬頭：標題、網址、加入日期
-    para(title, ST.h1, M, true, 2);
-    para(url, [9, .45, .45, .45], M, false, 0);
-    para("加入日期：" + new Date().toLocaleDateString("zh-TW"), [9, .45, .45, .45], M, false, 6);
-    page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: .6, color: rgb(.8, .78, .74) }); y -= 6;
+    para(title, "h1", M, true, 2);
+    para(url, "url", M, false, 0);
+    para("加入日期：" + new Date().toLocaleDateString("zh-TW"), "url", M, false, 6);
+    page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: .6, color: rgb(...PAL.rule) }); y -= 6;
     // 附圖：透過 wsrv.nl 轉成 JPG（原網站不給別的網站直接讀圖，PDF 也不能放 webp）；同一張圖只放一份
     const imgs = new Map();
     await Promise.all([...new Set(blocks.filter(b => b.t === "img").map(b => b.url))].map(async u => {
@@ -677,29 +710,29 @@
       if (b.t === "pagebreak") { newPage(); continue; }
       if (b.t === "img") {
         const im = imgs.get(b.url);
-        if (!im) { para("（附圖沒載到，請到原網站看）", [10.5, .6, .3, .1], M); continue; }
+        if (!im) { para("（附圖沒載到，請到原網站看）", "small", M, false, 0, PAL.warn); continue; }
         const x0 = M + (b.ind || 0), s = Math.min((W - M - x0) / im.width, (H - 2 * M) / im.height, .5);
         const w = im.width * s, h = im.height * s;
         if (y - h - 8 < M && !newPage()) break;
         y -= h + 4; page.drawImage(im, { x: x0, y, width: w, height: h }); y -= 4;
         continue;
       }
-      if (b.t === "opt") { para(b.s, ST.li, M + 8); continue; }
-      if (b.t === "ans") { para(b.s, [13, .08, .45, .22], M, true, 2); continue; }
-      if (b.t === "small") { para(b.s, [10.5, .45, .45, .45], M); continue; }
+      if (b.t === "opt") { para(b.s, "li", M + 8); continue; }
+      if (b.t === "ans") { para(b.s, "ans", M, true, 2); continue; }
+      if (b.t === "small") { para(b.s, "small", M); continue; }
       if (b.t === "gap") { y -= 5; continue; }
-      if (b.t === "hr") { y -= 6; if (y < M + 10) newPage(); else { page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: .5, color: rgb(.85, .83, .8) }); y -= 6; } continue; }
-      if (b.t === "h") { if (y < M + 80) newPage(); y -= 6; para(b.s, ST["h" + Math.min(3, b.lv)], M, true, 3); continue; }
-      if (b.t === "li") { para(b.s, ST.li, M + 6 + 12 * (b.ind || 0)); continue; }
+      if (b.t === "hr") { y -= 6; if (y < M + 10) newPage(); else { page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: .5, color: rgb(...PAL.rule) }); y -= 6; } continue; }
+      if (b.t === "h") { if (y < M + 80) newPage(); y -= 6; para(b.s, "h" + Math.min(3, b.lv), M, true, 3); continue; }
+      if (b.t === "li") { para(b.s, "li", M + 6 + 12 * (b.ind || 0)); continue; }
       if (b.t === "q") {
-        const top = y; para(b.s, ST.q, M + 12);
-        if (page && y < top) page.drawLine({ start: { x: M + 3, y: top - 3 }, end: { x: M + 3, y: y + 3 }, thickness: 2, color: rgb(.85, .8, .72) });
+        const top = y; para(b.s, "q", M + 12);
+        if (page && y < top) page.drawLine({ start: { x: M + 3, y: top - 3 }, end: { x: M + 3, y: y + 3 }, thickness: 2, color: rgb(...PAL.bar) });
         continue;
       }
-      if (b.t === "code") { para(b.s, ST.code, M + 8); continue; }
-      para(b.s, ST.p, M);
+      if (b.t === "code") { para(b.s, "code", M + 8); continue; }
+      para(b.s, "p", M);
     }
-    if (cut) para(`（網頁太長，只收前 ${MAXP} 頁）`, [11, .6, .3, .1], M);
+    if (cut) para(`（網頁太長，只收前 ${MAXP} 頁）`, "small", M, false, 0, PAL.warn);
     return { bytes: await pdf.save(), pages: pdf.getPageCount() };
   }
   // ---------- 資安考題練習網站：整份考卷（題目＋選項＋答案＋詳解）排成一份講義 ----------
@@ -713,7 +746,7 @@
     return JSON.parse((i >= 0 ? raw.slice(i + 17) : raw).trim().replace(/^```(?:json)?\s*|\s*```$/g, ""));
   }
   const quizTitle = p => p.title || `${p.year} 年第 ${p.term} 次・${p.subject_name}`;
-  async function openQuizPicker(origin) {
+  async function openQuizPicker(origin, dark) {
     setUploading("正在讀考卷清單…");
     let man;
     try { man = await quizJSON(origin + "/manifest.json"); }
@@ -728,10 +761,11 @@
         b.innerHTML = `<span class="nm"></span><span class="mt"></span>`;
         b.querySelector(".nm").textContent = quizTitle(p);
         b.querySelector(".mt").textContent = `${p.count} 題` + (p.exam_date ? "・" + p.exam_date : "") + (p.has_figure ? "・有附圖" : "") + (p.has_explanation ? "・有詳解" : "");
-        b.onclick = () => { $("#quizBox").hidden = true; importQuiz(origin, lv.name, p, $("#quizAnsEnd").checked); };
+        b.onclick = () => { $("#quizBox").hidden = true; LS.set("peidu-phone-webdark", $("#quizDark").checked); importQuiz(origin, lv.name, p, $("#quizAnsEnd").checked, $("#quizDark").checked); };
         list.appendChild(b);
       }
     }
+    $("#quizDark").checked = !!dark;
     $("#quizBox").hidden = false;
   }
   function quizBlocks(origin, paper, ansEnd) {
@@ -761,16 +795,16 @@
     if (ansEnd) B.push({ t: "pagebreak" }, { t: "h", lv: 1, s: "答案與詳解" }, ...END);
     return B;
   }
-  async function importQuiz(origin, lvName, paper, ansEnd) {
+  async function importQuiz(origin, lvName, paper, ansEnd, dark) {
     if (!PDFJS_OK) return toast("PDF 元件沒有載入成功，請重新整理（要有網路）");
     try {
       setUploading("正在下載考卷…");
       const data = await quizJSON(`${origin}/${paper.file}`);
       const title = `${lvName}｜${quizTitle(paper)}`;
       setUploading(webFontP ? "正在排成講義…" : "正在排成講義（第一次要下載中文字型，約 7MB）…");
-      const { bytes } = await makeWebPdf(title, `${origin}/　資料來源：資安考題練習・${data.source || paper.kind || ""}`, quizBlocks(origin, data, ansEnd));
+      const { bytes } = await makeWebPdf(title, `${origin}/　資料來源：資安考題練習・${data.source || paper.kind || ""}`, quizBlocks(origin, data, ansEnd), { dark });
       setUploading("");
-      await addPdf(new File([bytes], title.replace(/[\\/:*?"<>|｜]/g, "_").slice(0, 60) + (ansEnd ? "（答案在後）" : "") + ".pdf", { type: "application/pdf" }));
+      await addPdf(new File([bytes], title.replace(/[\\/:*?"<>|｜]/g, "_").slice(0, 60) + (ansEnd ? "（答案在後）" : "") + ".pdf", { type: "application/pdf" }), dark ? { theme: "dark" } : {});
     } catch (e) {
       console.warn(e);
       toast(e && e.message === "LIB" ? "排版元件下載失敗，確認有網路再試一次"
@@ -780,12 +814,12 @@
   $("#quizCancel").onclick = () => { $("#quizBox").hidden = true; };
   $("#quizBox").addEventListener("click", e => { if (e.target.id === "quizBox") $("#quizBox").hidden = true; });
 
-  async function addWebPage(input) {
+  async function addWebPage(input, dark) {
     const raw = ((input || "").match(/https?:\/\/[^\s<>"']+/i) || [(input || "").trim()])[0];
     let url;
     try { url = new URL(/^https?:\/\//i.test(raw) ? raw : "https://" + raw); if (!/\./.test(url.hostname)) throw 0; }
     catch { return toast("這不像網址，請貼上 https:// 開頭的網址"); }
-    if (url.hostname === QUIZ_HOST) return openQuizPicker(url.origin);  // 考題網站：選考卷，整份排成一份
+    if (url.hostname === QUIZ_HOST) return openQuizPicker(url.origin, dark);  // 考題網站：選考卷，整份排成一份
     if (!PDFJS_OK) return toast("PDF 元件沒有載入成功，請重新整理（要有網路）");
     try {
       setUploading("正在讀網頁…");
@@ -800,26 +834,27 @@
       const title = (page.title || url.hostname).replace(/\s+/g, " ").trim();
       if (blocks[0] && blocks[0].t === "h" && blocks[0].s.trim() === title) blocks.shift();  // 內文第一行就是標題：不要重複
       setUploading(webFontP ? "正在排成講義…" : "正在排成講義（第一次要下載中文字型，約 7MB）…");
-      const { bytes } = await makeWebPdf(title, url.href, blocks);
+      const { bytes } = await makeWebPdf(title, url.href, blocks, { dark });
       const name = title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) + ".pdf";
       setUploading("");
-      await addPdf(new File([bytes], name, { type: "application/pdf" }));
+      await addPdf(new File([bytes], name, { type: "application/pdf" }), dark ? { theme: "dark" } : {});
     } catch (e) {
       console.warn(e);
       toast(e && e.message === "LIB" ? "排版元件下載失敗，確認有網路再試一次"
         : e && e.message === "FONT" ? "中文字型下載失敗，確認有網路再試一次" : "加入網頁失敗，再試一次", 5000);
     } finally { setUploading(""); }
   }
-  $("#urlBtn").onclick = () => { $("#urlIn").value = ""; $("#urlBox").hidden = false; setTimeout(() => $("#urlIn").focus(), 50); };
+  $("#urlBtn").onclick = () => { $("#urlIn").value = ""; $("#urlDark").checked = !!LS.get("peidu-phone-webdark", false); $("#urlBox").hidden = false; setTimeout(() => $("#urlIn").focus(), 50); };
   $("#urlCancel").onclick = () => { $("#urlBox").hidden = true; };
   $("#urlBox").addEventListener("click", e => { if (e.target.id === "urlBox") $("#urlBox").hidden = true; });
-  $("#urlOk").onclick = () => { const v = $("#urlIn").value; if (!v.trim()) return toast("先貼上網址"); $("#urlBox").hidden = true; addWebPage(v); };
+  $("#urlOk").onclick = () => { const v = $("#urlIn").value; if (!v.trim()) return toast("先貼上網址"); $("#urlBox").hidden = true; LS.set("peidu-phone-webdark", $("#urlDark").checked); addWebPage(v, $("#urlDark").checked); };
   $("#urlIn").addEventListener("keydown", e => { if (e.key === "Enter") $("#urlOk").click(); });
 
   // ================= 開啟文件 =================
   function showView(name) { $("#shelf").hidden = name !== "shelf"; $("#reader").hidden = name !== "reader"; }
   function viewerMsg(text, spin = true) { $("#viewerMsg").hidden = !text; $("#viewerMsgText").textContent = text || ""; $("#viewerSpin").hidden = !spin; }
   async function openDoc(doc) {
+    $("#reader").classList.toggle("dark-doc", doc.theme === "dark");
     if (!PDFJS_OK) return toast("PDF 元件沒有載入成功，請重新整理（要有網路）");
     closeDoc();
     const seq = ++S.openSeq;
