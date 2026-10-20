@@ -14,7 +14,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon192.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/icon180.png">
-<link rel="stylesheet" href="style.css?v=20261020b">
+<link rel="stylesheet" href="style.css?v=20261020c">
 </head>
 <body>
 <div id="app">
@@ -29,6 +29,7 @@
       <div class="shelf-actions">
         <button id="addBtn" class="btn primary big" type="button">＋ 加入 PDF 講義</button>
         <input id="addFile" type="file" accept="application/pdf,.pdf" hidden>
+        <button id="urlBtn" class="btn big" type="button">🌐 貼網址</button>
       </div>
       <p class="shelf-label">星圖（點考點 → 老師口頭出題）</p>
       <div id="starList" class="star-list"></div>
@@ -245,7 +246,7 @@
         </select>
       </div>
     </section>
-    <p class="small" style="margin:0;opacity:.7">網站版本：20261020b（更新後如果看到的日期還是舊的，就把頁面重新整理）</p>
+    <p class="small" style="margin:0;opacity:.7">網站版本：20261020c（更新後如果看到的日期還是舊的，就把頁面重新整理）</p>
     <div class="modal-acts">
       <button type="button" id="keyClear" class="btn ghost">刪除金鑰</button>
       <button type="button" id="setClose" class="btn ghost">取消</button>
@@ -260,6 +261,19 @@
     <h2 id="cfTitle"></h2>
     <p id="cfBody"></p>
     <div class="modal-acts"><button type="button" id="cfCancel" class="btn ghost">先不要</button><button type="button" id="cfOk" class="btn danger">刪除</button></div>
+  </div>
+</div>
+
+<!-- 🌐 貼網址 -->
+<div id="urlBox" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-labelledby="urlTitle">
+    <h2 id="urlTitle">🌐 貼網址做陪讀</h2>
+    <p class="small">在 Safari 按「分享 → 拷貝」，回來長按下面的格子貼上。網頁的文字會排成一份講義放上書架，之後跟 PDF 一樣可以畫重點、跟老師討論。</p>
+    <div class="key-row">
+      <input id="urlIn" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…" aria-label="網址">
+    </div>
+    <p class="small">要登入才看得到的網頁讀不到；考題網站要按了才出現的答案也抓不到（這種請用 Safari「分享 → 選項 → PDF」存下來再加入）。</p>
+    <div class="modal-acts"><button type="button" id="urlCancel" class="btn ghost">取消</button><button type="button" id="urlOk" class="btn primary">加入</button></div>
   </div>
 </div>
 
@@ -307,9 +321,9 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="mindmap.js?v=20261020b"></script>
-<script src="pomodoro.js?v=20261020b"></script>
-<script src="live.js?v=20261020b"></script>
-<script src="app.js?v=20261020b"></script>
+<script src="mindmap.js?v=20261020c"></script>
+<script src="pomodoro.js?v=20261020c"></script>
+<script src="live.js?v=20261020c"></script>
+<script src="app.js?v=20261020c"></script>
 </body>
 </html>

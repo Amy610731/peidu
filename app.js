@@ -493,7 +493,7 @@
   $("#addFile").addEventListener("change", e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) addPdf(f); });
   $("#shelfSettings").onclick = () => openSettings();
 
-  function setUploading(text) { $("#uploading").hidden = !text; if (text) $("#uploadingText").textContent = text; $("#addBtn").disabled = !!text; }
+  function setUploading(text) { $("#uploading").hidden = !text; if (text) $("#uploadingText").textContent = text; $("#addBtn").disabled = !!text; const ub = $("#urlBtn"); if (ub) ub.disabled = !!text; }
   async function addPdf(file) {
     if (!PDFJS_OK) return toast("PDF 元件沒有載入成功，請重新整理（要有網路）");
     if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") return toast("只能加入 PDF 檔");
@@ -524,6 +524,197 @@
     try { await dbDeleteDoc(d.id); S.docs = S.docs.filter(x => x.id !== d.id); renderShelf(); toast("已刪除《" + stem(d.name) + "》"); }
     catch { toast("刪除失敗，再試一次"); }
   }
+
+  // ================= 🌐 貼網址：把網頁文字排成 PDF 放上書架（之後畫重點、討論都跟 PDF 一樣） =================
+  // 抓文字：先用 Jina Reader（原文照抄、會跑網頁的 JavaScript）；抓不到再請 Gemini 讀網址（會用一點額度）
+  // 排版：pdf-lib＋思源黑體（fonts/，第一次用才下載，約 7MB）；元件只在按「加入」時才載入，不拖慢開網站
+  const WEB_LIBS = ["https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js",
+    "https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"];
+  let webLibsP = null, webFontP = null;
+  const loadScript = src => new Promise((res, rej) => {
+    const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("LIB")); document.head.appendChild(s);
+  });
+  function loadWebLibs() { return webLibsP || (webLibsP = Promise.all(WEB_LIBS.map(loadScript)).catch(e => { webLibsP = null; throw e; })); }
+  function loadWebFont() {
+    return webFontP || (webFontP = fetch("fonts/NotoSansTC-Regular.ttf").then(r => { if (!r.ok) throw new Error("FONT"); return r.arrayBuffer(); })
+      .catch(e => { webFontP = null; throw e; }));
+  }
+  async function fetchPageJina(url) {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 60000);
+    try {
+      const r = await fetch("https://r.jina.ai/" + url, { signal: ctl.signal });
+      if (!r.ok) return null;
+      const raw = await r.text();
+      const i = raw.indexOf("Markdown Content:");
+      return { title: ((raw.match(/^Title:[ \t]*(.*)$/m) || [])[1] || "").trim(), md: i >= 0 ? raw.slice(i + 17) : raw };
+    } catch { return null; } finally { clearTimeout(t); }
+  }
+  async function fetchPageGemini(url) {
+    const key = await getKey().catch(() => null);
+    if (!key) return null;
+    const prompt = `請讀取這個網址的網頁：${url}\n把網頁的「主要內容」原封不動抄出來，用 Markdown（# 標題、- 清單）。` +
+      `規則：一字不改、不要摘要、不要翻譯、不要加你自己的說明；導覽列、廣告、頁尾不用抄。第一行寫「# 網頁標題」。`;
+    const body = { contents: [{ role: "user", parts: [{ text: prompt }] }], tools: [{ url_context: {} }],
+      generationConfig: { temperature: 0, maxOutputTokens: 32000 } };
+    // 實測：2.5 flash 讀網址最穩（偶爾回空白 → 再試一次）；flash-latest 會卡好幾分鐘 → 不用；每次最多等 45 秒
+    const models = (await textCandidates(key)).filter(m => !/latest/.test(m)).slice(0, 3);
+    const tries = models.flatMap(m => /2\.5-flash$/.test(m) ? [m, m] : [m]);
+    for (const model of tries) {
+      const post = b => {
+        const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 45000);
+        return fetch(`${API}/${model}:generateContent?key=${encodeURIComponent(key)}`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b), signal: ctl.signal })
+          .finally(() => clearTimeout(t));
+      };
+      let r;
+      try {
+        r = await post({ ...body, generationConfig: { ...body.generationConfig, thinkingConfig: { thinkingBudget: 0 } } });
+        if (r.status === 400) { const t = await r.clone().text(); if (/think/i.test(t)) r = await post(body); }
+      } catch { continue; }
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 429) { markExhausted("text", model, retrySeconds(j)); continue; }
+      if (!r.ok) continue;
+      const c = (j.candidates || [])[0] || {};
+      const meta = ((c.urlContextMetadata || c.url_context_metadata || {}).urlMetadata || [])[0];
+      if (meta && !/SUCCESS/.test(meta.urlRetrievalStatus || "")) return null;  // 網頁本身讀不到，換模型也一樣
+      const md = ((c.content || {}).parts || []).filter(p => !p.thought).map(p => p.text || "").join("").trim();
+      if (!md) continue;
+      return { title: ((md.match(/^#\s+(.*)$/m) || [])[1] || "").trim(), md };
+    }
+    return null;
+  }
+  // Markdown → 段落清單（標題、清單、引言、表格列、程式碼）；圖片和連結網址拿掉、只留文字
+  function mdToBlocks(md) {
+    const out = []; let code = false;
+    for (let line of md.replace(/\r/g, "").split("\n")) {
+      if (/^\s*```/.test(line)) { code = !code; continue; }
+      if (code) { if (line.trim()) out.push({ t: "code", s: line.replace(/\t/g, "    ") }); continue; }
+      line = line.replace(/!\[[^\]]*\]\((?:[^()]|\([^)]*\))*\)/g, "")
+        .replace(/\[\[[^\]]*\]\]\((?:[^()]|\([^)]*\))*\)/g, "")  // 維基的註腳 [[1]](網址)
+        .replace(/\[([^\]]*)\]\((?:[^()]|\([^)]*\))*\)/g, "$1").replace(/\[編輯\]/g, "")
+        .replace(/<[^>]+>/g, "").replace(/\*\*|__|`/g, "").replace(/\t/g, "  ").replace(/ /g, " ");
+      const prev = out[out.length - 1];
+      let m;
+      if (!line.trim()) { if (prev && prev.t !== "gap") out.push({ t: "gap" }); continue; }
+      if (/^\s*=+\s*$/.test(line) && prev && prev.t === "p") { prev.t = "h"; prev.lv = 1; continue; }  // 標題底下一排 === 的寫法
+      if (/^\s*-+\s*$/.test(line) && prev && prev.t === "p") { prev.t = "h"; prev.lv = 2; continue; }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { out.push({ t: "hr" }); continue; }
+      if (/^[\s|:-]+$/.test(line) && line.includes("-") && line.includes("|")) continue;  // 表格的分隔線
+      if ((m = line.match(/^\s*(#{1,6})\s+(.*?)\s*#*\s*$/))) { if (m[2]) out.push({ t: "h", lv: m[1].length, s: m[2] }); continue; }
+      if (/^\s*\|.*\|\s*$/.test(line)) { out.push({ t: "p", s: line.trim().replace(/^\||\|$/g, "").split("|").map(x => x.trim()).filter(Boolean).join("　│　") }); continue; }
+      if ((m = line.match(/^(\s*)[-*+]\s+(.*)$/))) { if (m[2].trim()) out.push({ t: "li", ind: Math.min(3, Math.floor(m[1].length / 2)), s: "• " + m[2].trim() }); continue; }
+      if ((m = line.match(/^(\s*)(\d+[.)])\s+(.*)$/))) { out.push({ t: "li", ind: Math.min(3, Math.floor(m[1].length / 2)), s: m[2] + " " + m[3].trim() }); continue; }
+      if ((m = line.match(/^\s*>\s?(.*)$/))) { if (m[1].trim()) out.push({ t: "q", s: m[1].trim() }); continue; }
+      out.push({ t: "p", s: line.trim() });
+    }
+    while (out.length && out[out.length - 1].t === "gap") out.pop();
+    return out;
+  }
+  // 排成適合手機看的窄頁 PDF（字是真的文字，搜尋、畫重點、老師讀頁面都照常）
+  async function makeWebPdf(title, url, blocks) {
+    await loadWebLibs();
+    const fontBytes = await loadWebFont();
+    const { PDFDocument, rgb, pushGraphicsState, popGraphicsState, setTextRenderingMode, TextRenderingMode, setLineWidth, setStrokingRgbColor } = PDFLib;
+    const pdf = await PDFDocument.create();
+    pdf.registerFontkit(fontkit);
+    pdf.setTitle(title); pdf.setSubject(url); pdf.setCreator("陪讀手機版");
+    const font = await pdf.embedFont(fontBytes, { subset: true });
+    const has = new Set(font.getCharacterSet());
+    const clean = s => [...s].filter(c => c === " " || has.has(c.codePointAt(0))).join("");  // 字型沒有的字（emoji 等）拿掉，免得排版壞掉
+    const W = 420, H = 594, M = 30, MAXP = 300;
+    const ST = { p: [13, .18, .17, .15], li: [13, .18, .17, .15], q: [12.5, .35, .33, .3], code: [11, .3, .3, .3], h1: [20, .1, .1, .1], h2: [17, .12, .12, .12], h3: [15, .14, .14, .14] };
+    const wcache = new Map();
+    const wid = (s, size) => { const k = size + s; let w = wcache.get(k); if (w === undefined) { w = font.widthOfTextAtSize(s, size); wcache.set(k, w); } return w; };
+    const NO_START = "，。、；：！？）」』】》,.;:!?)]}%";
+    function wrap(text, size, maxW) {
+      const toks = text.match(/[\x21-\x7eÀ-ɏ]+|\s+|[^]/gu) || [];
+      const lines = []; let cur = "", cw = 0;
+      for (const tk of toks) {
+        const w = wid(tk, size);
+        if (cw + w <= maxW || (cur && tk.length === 1 && NO_START.includes(tk))) { cur += tk; cw += w; continue; }
+        if (/^\s+$/.test(tk)) { lines.push(cur); cur = ""; cw = 0; continue; }
+        if (cur.trim()) lines.push(cur);
+        cur = ""; cw = 0;
+        if (w <= maxW) { cur = tk; cw = w; continue; }
+        for (const ch of tk) { const cwid = wid(ch, size); if (cw + cwid > maxW && cur) { lines.push(cur); cur = ""; cw = 0; } cur += ch; cw += cwid; }  // 超長網址：硬切
+      }
+      if (cur.trim()) lines.push(cur);
+      return lines.map(l => l.replace(/\s+$/, ""));
+    }
+    let page = null, y = 0, cut = false;
+    const newPage = () => { if (pdf.getPageCount() >= MAXP) { cut = true; return false; } page = pdf.addPage([W, H]); y = H - M; return true; };
+    newPage();
+    function line(text, size, x, color, bold) {
+      const lh = size * 1.62;
+      if (y - lh < M - 4 && !newPage()) return false;
+      y -= lh;
+      if (bold) page.pushOperators(pushGraphicsState(), setTextRenderingMode(TextRenderingMode.FillAndOutline), setLineWidth(size * 0.03), setStrokingRgbColor(...color));
+      page.drawText(text, { x, y: y + size * 0.3, size, font, color: rgb(...color) });
+      if (bold) page.pushOperators(popGraphicsState());
+      return true;
+    }
+    function para(text, st, x0, bold, extra = 0) {
+      const [size, ...color] = st;
+      for (const ln of wrap(clean(text), size, W - M - x0)) if (!line(ln, size, x0, color, bold)) return false;
+      y -= extra;
+      return true;
+    }
+    // 第一頁抬頭：標題、網址、加入日期
+    para(title, ST.h1, M, true, 2);
+    para(url, [9, .45, .45, .45], M, false, 0);
+    para("加入日期：" + new Date().toLocaleDateString("zh-TW"), [9, .45, .45, .45], M, false, 6);
+    page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: .6, color: rgb(.8, .78, .74) }); y -= 6;
+    for (const b of blocks) {
+      if (cut) break;
+      if (b.t === "gap") { y -= 5; continue; }
+      if (b.t === "hr") { y -= 6; if (y < M + 10) newPage(); else { page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: .5, color: rgb(.85, .83, .8) }); y -= 6; } continue; }
+      if (b.t === "h") { if (y < M + 80) newPage(); y -= 6; para(b.s, ST["h" + Math.min(3, b.lv)], M, true, 3); continue; }
+      if (b.t === "li") { para(b.s, ST.li, M + 6 + 12 * (b.ind || 0)); continue; }
+      if (b.t === "q") {
+        const top = y; para(b.s, ST.q, M + 12);
+        if (page && y < top) page.drawLine({ start: { x: M + 3, y: top - 3 }, end: { x: M + 3, y: y + 3 }, thickness: 2, color: rgb(.85, .8, .72) });
+        continue;
+      }
+      if (b.t === "code") { para(b.s, ST.code, M + 8); continue; }
+      para(b.s, ST.p, M);
+    }
+    if (cut) para(`（網頁太長，只收前 ${MAXP} 頁）`, [11, .6, .3, .1], M);
+    return { bytes: await pdf.save(), pages: pdf.getPageCount() };
+  }
+  async function addWebPage(input) {
+    const raw = ((input || "").match(/https?:\/\/[^\s<>"']+/i) || [(input || "").trim()])[0];
+    let url;
+    try { url = new URL(/^https?:\/\//i.test(raw) ? raw : "https://" + raw); if (!/\./.test(url.hostname)) throw 0; }
+    catch { return toast("這不像網址，請貼上 https:// 開頭的網址"); }
+    if (!PDFJS_OK) return toast("PDF 元件沒有載入成功，請重新整理（要有網路）");
+    try {
+      setUploading("正在讀網頁…");
+      let page = await fetchPageJina(url.href);
+      let blocks = page ? mdToBlocks(page.md) : [];
+      if (blocks.reduce((n, b) => n + (b.s || "").length, 0) < 150) {  // 抓到的字太少（擋爬蟲、要登入…）→ 換 Gemini 讀
+        setUploading("換 Gemini 讀網頁…");
+        const g = await fetchPageGemini(url.href);
+        if (g) { page = g; blocks = mdToBlocks(g.md); }
+      }
+      if (!page || !blocks.some(b => b.s)) return toast("這個網頁讀不到（可能要登入、有防爬，或 Gemini 現在太忙）。等一下再試，或改用 Safari「分享 → 選項 → PDF」存下來再加入。", 7000);
+      const title = (page.title || url.hostname).replace(/\s+/g, " ").trim();
+      if (blocks[0] && blocks[0].t === "h" && blocks[0].s.trim() === title) blocks.shift();  // 內文第一行就是標題：不要重複
+      setUploading(webFontP ? "正在排成講義…" : "正在排成講義（第一次要下載中文字型，約 7MB）…");
+      const { bytes } = await makeWebPdf(title, url.href, blocks);
+      const name = title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) + ".pdf";
+      setUploading("");
+      await addPdf(new File([bytes], name, { type: "application/pdf" }));
+    } catch (e) {
+      console.warn(e);
+      toast(e && e.message === "LIB" ? "排版元件下載失敗，確認有網路再試一次"
+        : e && e.message === "FONT" ? "中文字型下載失敗，確認有網路再試一次" : "加入網頁失敗，再試一次", 5000);
+    } finally { setUploading(""); }
+  }
+  $("#urlBtn").onclick = () => { $("#urlIn").value = ""; $("#urlBox").hidden = false; setTimeout(() => $("#urlIn").focus(), 50); };
+  $("#urlCancel").onclick = () => { $("#urlBox").hidden = true; };
+  $("#urlBox").addEventListener("click", e => { if (e.target.id === "urlBox") $("#urlBox").hidden = true; });
+  $("#urlOk").onclick = () => { const v = $("#urlIn").value; if (!v.trim()) return toast("先貼上網址"); $("#urlBox").hidden = true; addWebPage(v); };
+  $("#urlIn").addEventListener("keydown", e => { if (e.key === "Enter") $("#urlOk").click(); });
 
   // ================= 開啟文件 =================
   function showView(name) { $("#shelf").hidden = name !== "shelf"; $("#reader").hidden = name !== "reader"; }
