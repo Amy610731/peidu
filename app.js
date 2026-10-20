@@ -299,6 +299,7 @@
     },
     async addChat(m) {
       const msg = { id: uid(), docId: S.doc.id, page: m.page || S.page || 1, role: m.role, text: m.text, created: nowISO() };
+      if (m.topic) msg.topic = String(m.topic).slice(0, 40);  // 星圖模式：這句話是在哪個考點講的
       await dbPut("chat", msg);
       if (S.doc && S.doc.id === msg.docId) { S.chat = [...S.chat, msg]; if (S.tab === "chat") renderSide(); }
       touchDoc();
@@ -311,6 +312,7 @@
     clearTimeout(touchDoc.t); touchDoc.t = setTimeout(() => saveDocMeta(d), 800);
   }
   function saveDocMeta(d) {
+    if (d.virtual) return Promise.resolve();  // 星圖不是講義，不放進書架
     const { ...rec } = d; delete rec.savedPage;
     return dbPut("docs", rec).catch(() => {});
   }
@@ -569,11 +571,145 @@
     if (S.pdf) { try { S.pdf.destroy(); } catch {} S.pdf = null; }
     S.tc.clear(); S.chars.clear();
     S.anns = []; S.chat = []; S.sys = []; S.editing = null; S.pending = null;
+    if (S.star) {  // 離開星圖：iframe 清空（下次進來是乾淨的總覽）
+      S.star = null; S.topic = null; clearTimeout(STAR.t);
+      $("#reader").classList.remove("star");
+      $("#starFrame").removeAttribute("src");
+    }
     S.doc = null;
     hideSelbar(); setBox(false); closeComposer(); closeRegionPop(true);
   }
   $("#backBtn").onclick = () => backToShelf();
   function backToShelf() { closeDoc(); closeSheet(); showView("shelf"); loadDocs(); }
+
+  // ================= 🌌 星圖（嵌入 l23-map 系列，點考點 → 即時語音老師拿到考點內容） =================
+  // 星圖網頁用 postMessage 把「點開的考點／作答結果」送上來（見 l23-map 的 emit）；老師的情境就是這些資料。
+  // 資安星圖之後做好也放在同一個網域下，加一行到 STAR_MAPS 就能用。
+  const LOCAL = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  const STAR_MAPS = [
+    { id: "l23", name: "科目三星圖", sub: "AI 應用規劃師中級・機器學習技術與應用", subject: "iPAS「AI 應用規劃師中級」的科目三（機器學習技術與應用）",
+      url: LOCAL ? `${location.origin}/_star/l23/?embed=1` : "https://amy610731.github.io/l23-map/?embed=1" },
+    { id: "sec2", name: "資安科目二星圖", sub: "資訊安全工程師初級・科目二", subject: "iPAS「資訊安全工程師初級」的科目二",
+      url: LOCAL ? `${location.origin}/_star/sec2/?embed=1` : "https://amy610731.github.io/l23-map/sec2/?embed=1" },
+    { id: "sec1", name: "資安科目一星圖", sub: "資訊安全工程師初級・科目一", subject: "iPAS「資訊安全工程師初級」的科目一",
+      url: LOCAL ? `${location.origin}/_star/sec1/?embed=1` : "https://amy610731.github.io/l23-map/sec1/?embed=1" },
+  ];
+  const STAR = { t: 0, answers: {} };
+  const starOrigin = m => { try { return new URL(m.url).origin; } catch { return ""; } };
+  const clip = (s, n) => String(s == null ? "" : s).slice(0, n);
+  const LETTERS = "ABCDEFGH";
+  function renderStarList() {
+    $("#starList").innerHTML = STAR_MAPS.map(m => `<button type="button" class="star-btn" data-star="${esc(m.id)}"><b>🌌 ${esc(m.name)}</b><small>${esc(m.sub)}</small></button>`).join("");
+    // 還沒上線的星圖（網址 404）先藏起來；只在正式網站查（同網域，本機測試不查）
+    if (!LOCAL) STAR_MAPS.forEach(m => {
+      fetch(m.url.replace("?embed=1", ""), { method: "HEAD", cache: "no-store" }).then(r => {
+        if (!r.ok) { const b = $(`#starList [data-star="${m.id}"]`); if (b) b.hidden = true; }
+      }).catch(() => {});
+    });
+  }
+  $("#starList").addEventListener("click", e => {
+    const b = e.target.closest("[data-star]"); if (!b) return;
+    const m = STAR_MAPS.find(x => x.id === b.dataset.star); if (m) openStar(m);
+  });
+  async function openStar(map) {
+    closeDoc();
+    const seq = ++S.openSeq;
+    S.doc = { id: "__star_" + map.id, name: map.name, virtual: true, pageCount: 0 };
+    S.star = map; S.topic = null; S.page = 1; STAR.answers = {};
+    showView("reader");
+    $("#reader").classList.add("star");
+    $("#docName").textContent = "🌌 " + map.name;
+    $("#starFrame").src = map.url;
+    setTab("chat");
+    try {
+      const chat = await dbByDoc("chat", S.doc.id);
+      if (seq !== S.openSeq) return;
+      S.chat = (chat || []).sort((a, b) => String(a.created).localeCompare(String(b.created)));
+    } catch { /* 讀不到對話紀錄就從空的開始 */ }
+    renderSide();
+  }
+  // 把一個考點整理成給老師看的文字
+  function starTopicText(t) {
+    const L = [];
+    L.push(`【考點】${t.title}（${[t.sectionName, t.chapter].filter(Boolean).join("｜")}）`);
+    L.push(t.examHits ? `官方公告試題考過 ${t.examHits} 次（${(t.examRefs || []).join("、")}）` : "官方公告試題還沒考過這個考點");
+    if (t.summary) L.push(`白話說明：${t.summary}`);
+    if (t.keyPoints.length) L.push("重點：" + t.keyPoints.map((k, i) => `${i + 1}. ${k}`).join(" "));
+    if (t.trap) L.push(`常見陷阱：${t.trap}`);
+    if (t.related.length) L.push("相關考點：" + t.related.map(r => r.title + (r.why ? `（${r.why}）` : "")).join("；"));
+    if (t.quiz.length) {
+      L.push(`\n【畫面上的練習題，共 ${t.quiz.length} 題；編號和畫面上一樣。正確答案與解析是給你判斷用的，她回答之前不能講】`);
+      t.quiz.forEach((q, i) => {
+        L.push(`第 ${i + 1} 題（${q.source}）：${q.stem}`);
+        L.push(q.options.map((o, j) => `(${LETTERS[j]}) ${o}`).join("　"));
+        L.push(`正確答案：(${LETTERS[q.answer]})`);
+        if (q.hint) L.push(`答錯時畫面會顯示的提示（只給你引導她用，不要照念、不要當成答案）：${q.hint}`);
+        if (q.explanation) L.push(`解析：${q.explanation}`);
+      });
+    } else L.push("這個考點沒有練習題。");
+    return L.join("\n").slice(0, 9000);
+  }
+  // 收進來的資料一律當成不可信的字串處理（長度、型別都檢查）
+  function cleanTopic(raw) {
+    if (!raw || typeof raw !== "object" || typeof raw.title !== "string") return null;
+    const arr = (a, n, f) => (Array.isArray(a) ? a.slice(0, n).map(f) : []);
+    return {
+      id: clip(raw.id, 40), title: clip(raw.title, 60), sectionName: clip(raw.sectionName, 60), chapter: clip(raw.chapter, 60),
+      examHits: +raw.examHits || 0, examRefs: arr(raw.examRefs, 6, x => clip(x, 30)),
+      summary: clip(raw.summary, 900), keyPoints: arr(raw.keyPoints, 8, x => clip(x, 300)), trap: clip(raw.trap, 400),
+      related: arr(raw.related, 5, r => ({ title: clip(r && r.title, 40), why: clip(r && r.why, 120) })),
+      quiz: arr(raw.quiz, 8, q => ({
+        stem: clip(q && q.stem, 900), options: arr(q && q.options, 6, o => clip(o, 300)),
+        answer: Math.max(0, Math.min(5, +(q && q.answer) || 0)), hint: clip(q && q.hint, 300), explanation: clip(q && q.explanation, 700), source: clip(q && q.source, 40) })),
+    };
+  }
+  // 點了新考點／回到總覽：連線中就偷偷告訴老師（不要它回應）；沒連線的話，下次連線時 getConfig 會帶進去
+  function starSetTopic(t) {
+    S.topic = t; STAR.answers = {};
+    clearTimeout(STAR.t);
+    if (!PeiduLive.isOn()) return;
+    STAR.t = setTimeout(() => {
+      if (!PeiduLive.isOn() || !S.star) return;
+      PeiduLive.sendText(t
+        ? `（這則不用回應，只是讓你知道：學生在畫面上點開了新的考點「${t.title}」，之後她問「這個」「這題」「考我」就是指它。資料如下）\n${starTopicText(t)}`
+        : "（這則不用回應，只是讓你知道：學生回到考點清單了，現在畫面上沒有點開的考點。）", false);
+    }, 700);
+  }
+  function starAnswered(m) {
+    const t = S.topic, q = t && t.quiz[+m.qi];
+    if (!t || !q || m.topicId !== t.id) return;
+    let text;
+    if (m.type === "reveal") text = `學生在畫面上按了「看解析」，看了第 ${+m.qi + 1} 題的答案。`;
+    else {
+      const picked = Math.max(0, Math.min(5, +m.picked || 0)), ok = picked === q.answer;
+      text = `學生在畫面上作答第 ${+m.qi + 1} 題，選了 (${LETTERS[picked]})，${ok ? "答對了" : "答錯了"}${+m.tries > 1 ? `（第 ${+m.tries} 次嘗試）` : ""}。`;
+    }
+    STAR.answers[m.qi] = text;
+    if (PeiduLive.isOn()) PeiduLive.sendText("（這則不用回應，只是讓你知道：" + text + "）", false);
+  }
+  addEventListener("message", e => {
+    if (!S.star || e.origin !== starOrigin(S.star) || e.source !== $("#starFrame").contentWindow) return;
+    const m = e.data;
+    if (!m || m.src !== "l23-map") return;
+    if (m.type === "topic") { const t = cleanTopic(m.topic); if (t) starSetTopic(t); }
+    else if (m.type === "home") starSetTopic(null);
+    else if (m.type === "answer" || m.type === "reveal") starAnswered(m);
+  });
+  const STAR_RULES = map => `=== 星圖練習模式（和上面「講義」「這一頁」有衝突的地方，以這一段為準）===
+學生正在用星圖複習${map.subject}。畫面上是一張考點星圖，她點開一個考點，畫面就會顯示白話說明、重點、陷阱和練習題。這次沒有講義頁面，也沒有螢光筆；她說的「這題」「這個」指的是她目前點開的考點，或它的練習題。
+你的任務是用口頭問答幫她練習和複習：
+- 她說「考我」「出題」「開始」「下一題」時，從目前考點的練習題挑一題（照順序；她指定第幾題就照她說的），用口語把題幹和每個選項念給她聽，念完停下來等她回答。出題這一段可以不受「120 字以內」的限制，但選項要念清楚、不要念出標點符號；題幹太長、有程式碼或公式時，用口語簡述重點，並說「完整題目在畫面上」。
+- 她回答之前，絕對不能先講答案，也不能暗示答案。她回答之後：答對了，用一兩句講為什麼對，順便點出最容易混淆的那個選項；答錯了，先不要公佈答案，用你自己的話給一個提示引導她再想一次（資料裡的提示只是參考，不要照念，更不要把它當成答案念出來）；她說「不知道」「直接告訴我」，或第二次還答錯，才公佈正確答案並講解。
+- 一次只出一題。講完等她說要不要下一題，不要自己連續出題，也不要她沒說話就開始考。
+- 她問概念（「這是什麼意思」「為什麼」「跟某某差在哪」）就用考點資料回答：先白話、再講考試陷阱；資料沒寫的觀念用你自己的知識補充。
+- 收到「（這則不用回應…）」開頭、說她在畫面上點了別的考點或作答的訊息，不要出聲，只要記住：之後以最新的考點為準；她在畫面上作答的結果算她已經回答過那一題，她問「我答對了嗎」就照結果回答。
+- 如果現在沒有點開任何考點：她想練習，就請她先在星圖上點一個考點，或請她說想練哪個主題，你就口頭出一題概念題。`;
+  function liveSystemStar() {
+    const rules = LIVE_RULES.split("\n").filter(l => !/^- 你有一個 highlight/.test(l) && !/^- 她問「這題」「這段」/.test(l)).join("\n");
+    const ctx = S.topic ? `=== 學生目前點開的考點 ===\n${starTopicText(S.topic)}` + (Object.keys(STAR.answers).length ? "\n她在畫面上已經作答：" + Object.values(STAR.answers).join("") : "") : "=== 學生還沒有點開任何考點 ===";
+    return [rules, TUTOR, STAR_RULES(S.star), personaText(), ctx].join("\n\n");
+  }
+  renderStarList();
 
   // ================= 頁面渲染 =================
   const viewer = $("#viewer");
@@ -1174,17 +1310,17 @@
   // 按麥克風／問老師之前呼叫：沒開就開（要在點擊事件裡、await 之前呼叫）
   function ensureLive() {
     if (PeiduLive.isOn()) return true;
-    if (!S.pdf) { toast("講義還在打開中"); return false; }
+    if (!S.pdf && !S.star) { toast("講義還在打開中"); return false; }
     if (!hasKey()) { openSettings("要先貼上 Gemini 金鑰，才能跟老師語音討論"); return false; }
     setLive(true);
     return true;
   }
   function setLive(on) {
     if (!on) { PeiduLive.stop(); LIVE.caption = null; LIVE.lastTurn = null; if (S.tab === "chat") renderSide(); return; }
-    if (!S.pdf) return toast("講義還在打開中");
+    if (!S.pdf && !S.star) return toast("講義還在打開中");
     if (!hasKey()) return openSettings("要先貼上 Gemini 金鑰，才能跟老師語音討論");
     // ⚠ 這裡必須同步呼叫 PeiduLive.start（不能先 await），iPhone 才會讓聲音出來
-    PeiduLive.start({
+    const liveOpts = {
       voice: prefs.voice,
       silenceMs: +prefs.silence,
       speed: +prefs.speed || 0.9,  // 老師語速
@@ -1195,6 +1331,7 @@
         const key = await getKey();
         if (!key) throw new Error("NEED_KEY");
         const model = await pickLiveModel(key);
+        if (S.star) return { key, model, system: liveSystemStar() };  // 星圖：情境是目前點開的考點
         const pg = S.page || 1;
         LIVE.page = pg;
         const text = (await getPageText(pg)).slice(0, 6000);
@@ -1211,9 +1348,9 @@
         paintCaption();
         if (!S.doc) return;
         try {
-          if (amy) await store.addChat({ page: S.page, role: "amy", text: amy });
+          if (amy) await store.addChat({ page: S.page, role: "amy", text: amy, topic: S.star && S.topic ? S.topic.title : "" });
           if (claude) {
-            await store.addChat({ page: S.page, role: "claude", text: claude });
+            await store.addChat({ page: S.page, role: "claude", text: claude, topic: S.star && S.topic ? S.topic.title : "" });
             LIVE.awaiting = null;
             if (LIVE.pendingAnn) { const id = LIVE.pendingAnn; LIVE.pendingAnn = null; await store.updateAnn(id, { answer: claude }); }
           }
@@ -1264,7 +1401,9 @@
         toast("這個語音模型現在不能用，換另一個…");
         if (PeiduLive.restart() && LIVE.awaiting) PeiduLive.sendText(LIVE.awaiting, true);
       },
-    });
+    };
+    if (S.star) delete liveOpts.onHighlight;  // 星圖沒有講義可以畫螢光筆
+    PeiduLive.start(liveOpts);
   }
   $("#micBtn").onclick = () => { if (PeiduLive.isOn()) setLive(false); else ensureLive(); };
   $("#muteBtn").onclick = () => {
@@ -1276,7 +1415,7 @@
   // 傳文字給老師（老師用聲音回答）；文字問題本身記進對話
   function sendLive({ text, display, page, annId }) {
     if (!PeiduLive.isOn()) return false;
-    store.addChat({ page: page || S.page, role: "amy", text: display || text }).catch(writeErr);
+    store.addChat({ page: page || S.page, role: "amy", text: display || text, topic: S.star && S.topic ? S.topic.title : "" }).catch(writeErr);
     LIVE.pendingAnn = annId || null;
     LIVE.awaiting = text;
     LIVE.lastTurn = { amy: display || text, claude: "" }; paintCaption();
@@ -1389,13 +1528,15 @@
     const body = $("#sideBody");
     const parts = [];
     if (!S.chat.length && !S.sys.length && !LIVE.caption) {
-      parts.push(`<div class="hint">按下面的 <b>🎙️ 開始陪讀</b>，直接說話問老師；老師說話時也可以直接插話。<br>不方便說話時，可以在下面打字問（老師一樣用說的回答）。</div>`);
+      parts.push(S.star
+        ? `<div class="hint">先在星圖上點一個考點，按下面的 <b>🎙️ 開始陪讀</b>，然後說「<b>考我</b>」，老師會用說的出題，你直接口頭回答。<br>也可以問「這是什麼意思」「跟某某差在哪」；不方便說話時可以在下面打字。</div>`
+        : `<div class="hint">按下面的 <b>🎙️ 開始陪讀</b>，直接說話問老師；老師說話時也可以直接插話。<br>不方便說話時，可以在下面打字問（老師一樣用說的回答）。</div>`);
     }
     const sysAt = i => S.sys.filter(s => s.after === i).map(s => `<div class="sys">${esc(s.text)}</div>`).join("");
     S.chat.forEach((m, i) => {
       parts.push(sysAt(i));
       const mine = m.role !== "claude";
-      parts.push(`<div class="msg ${mine ? "amy" : "claude"}" data-id="${esc(m.id)}"><span class="txt">${esc(m.text)}</span><div class="mmeta"><span>${mine ? "我" : "老師"} · p.${+m.page}</span>${mine ? "" : `<button type="button" data-act="pin">📌 記到這頁</button>`}</div></div>`);
+      parts.push(`<div class="msg ${mine ? "amy" : "claude"}" data-id="${esc(m.id)}"><span class="txt">${esc(m.text)}</span><div class="mmeta"><span>${mine ? "我" : "老師"} · ${S.star ? esc(m.topic || "星圖") : "p." + (+m.page)}</span>${mine || S.star ? "" : `<button type="button" data-act="pin">📌 記到這頁</button>`}</div></div>`);
     });
     parts.push(S.sys.filter(s => s.after >= S.chat.length).map(s => `<div class="sys">${esc(s.text)}</div>`).join(""));
     const c = LIVE.caption;
