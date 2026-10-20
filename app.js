@@ -761,11 +761,12 @@
         b.innerHTML = `<span class="nm"></span><span class="mt"></span>`;
         b.querySelector(".nm").textContent = quizTitle(p);
         b.querySelector(".mt").textContent = `${p.count} 題` + (p.exam_date ? "・" + p.exam_date : "") + (p.has_figure ? "・有附圖" : "") + (p.has_explanation ? "・有詳解" : "");
-        b.onclick = () => { $("#quizBox").hidden = true; LS.set("peidu-phone-webdark", $("#quizDark").checked); importQuiz(origin, lv.name, p, $("#quizAnsEnd").checked, $("#quizDark").checked); };
+        b.onclick = () => { $("#quizBox").hidden = true; LS.set("peidu-phone-webdark", $("#quizDark").checked); LS.set("peidu-phone-quizai", $("#quizAI").checked); importQuiz(origin, lv.name, p, $("#quizAnsEnd").checked, $("#quizDark").checked, $("#quizAI").checked); };
         list.appendChild(b);
       }
     }
     $("#quizDark").checked = !!dark;
+    $("#quizAI").checked = !!LS.get("peidu-phone-quizai", true);
     $("#quizBox").hidden = false;
   }
   function quizBlocks(origin, paper, ansEnd) {
@@ -785,21 +786,57 @@
         B.push({ t: "opt", s: `(${k}) ${opts[k] == null ? "" : String(opts[k]).trim()}` });
         if (of[k]) B.push({ t: "img", url: `${origin}/img/${of[k]}`, ind: 18 });
       }
-      const ex = q.explanation, exText = typeof ex === "string" ? ex : ex ? (ex.teacher_note || ex.body || "") : "";
+      // 詳解：跟網站一樣，先放總說明，再放 (A)(B)(C)(D) 逐項分析（正確選項的代號上色）
+      const ex = q.explanation, per = ex && typeof ex === "object" && ex.per_option ? ex.per_option : null;
+      const exText = typeof ex === "string" ? ex : ex ? ((per ? ex.body || ex.teacher_note : ex.teacher_note || ex.body) || "") : "";
       const a = [{ t: "ans", s: `答案：${ansText(q) || "（官方未公布）"}${STATUS[q.status] || ""}` }];
       if (q.note) a.push({ t: "small", s: "備註：" + q.note });
+      if (ex && ex.ai) a.push({ t: "small", s: "（以下是 Gemini 依官方答案補寫的解析，僅供參考）" });
       if (exText) a.push({ t: "q", s: exText });
+      const right = new Set((q.answers || [q.answer || []]).flat());
+      if (per) for (const k of Object.keys(per).sort()) if (per[k]) a.push({ t: "q", s: (right.has(k) ? `**(${k})**` : `(${k})`) + " " + String(per[k]).trim() });
       if (ansEnd) END.push({ t: "h", lv: 3, s: `第 ${q.no} 題` }, ...a); else B.push(...a);
       B.push({ t: "gap" });
     }
     if (ansEnd) B.push({ t: "pagebreak" }, { t: "h", lv: 1, s: "答案與詳解" }, ...END);
     return B;
   }
-  async function importQuiz(origin, lvName, paper, ansEnd, dark) {
+  // 網站沒附詳解的題目：請 Gemini 依官方答案補 ABCD 逐項解析（每 10 題問一次，失敗的就跳過）
+  async function aiExplain(questions) {
+    const need = questions.filter(q => !q.explanation && Object.keys(q.options || {}).length && (q.answer || []).length && q.status !== "bonus");
+    let done = 0, failed = 0;
+    for (let i = 0; i < need.length; i += 10) {
+      const batch = need.slice(i, i + 10);
+      setUploading(`Gemini 補解析中（${done} / ${need.length} 題）…`);
+      const items = batch.map(q => ({ no: q.no, stem: q.stem, options: q.options, answer: (q.answers && q.answers.length > 1 ? q.answers.map(x => x.join("")).join(" 或 ") : q.answer.join("")), figure: (q.figures || []).length ? "（本題有附圖，你看不到圖，只能依文字判斷）" : undefined }));
+      const prompt = "你是 iPAS 資訊安全工程師考試的老師。下面是考古題，answer 是官方答案（一定以官方答案為準，不可以改答案）。\n" +
+        "請為每一題寫解析，用繁體中文、白話、像在教國中生也聽得懂：\n" +
+        "- summary：一到兩句，點出這題考什麼觀念、為什麼答案是它。\n" +
+        "- per_option：每個選項一句話，說明它為什麼對或錯；正確選項要寫出「選這個」。\n" +
+        "不確定的地方就照官方答案保守說明，不要編造不存在的標準條文或數字。\n" +
+        '只回 JSON 陣列：[{"no": 題號, "summary": "...", "per_option": {"A": "...", "B": "...", "C": "...", "D": "..."}}]\n\n' +
+        JSON.stringify(items);
+      try {
+        const out = await geminiJSON(prompt, 8000);
+        for (const r of Array.isArray(out) ? out : out.items || []) {
+          const q = batch.find(x => x.no === Number(r.no));
+          if (q && r.per_option && typeof r.per_option === "object") q.explanation = { body: String(r.summary || ""), per_option: r.per_option, ai: true };
+        }
+      } catch (e) {
+        if (String(e && e.message) === "NEED_KEY" || String(e && e.message).startsWith("KEY:")) { toast("沒有可用的 Gemini 金鑰，先不補解析（設定裡貼金鑰後再加一次就有）", 5000); return; }
+        console.warn(e);
+      }
+      done += batch.length;
+      failed += batch.filter(q => !q.explanation).length;
+    }
+    if (failed) toast(`有 ${failed} 題 Gemini 沒補到解析（可能額度用完或太忙），其他都好了`, 5000);
+  }
+  async function importQuiz(origin, lvName, paper, ansEnd, dark, ai) {
     if (!PDFJS_OK) return toast("PDF 元件沒有載入成功，請重新整理（要有網路）");
     try {
       setUploading("正在下載考卷…");
       const data = await quizJSON(`${origin}/${paper.file}`);
+      if (ai) await aiExplain(data.questions || []);
       const title = `${lvName}｜${quizTitle(paper)}`;
       setUploading(webFontP ? "正在排成講義…" : "正在排成講義（第一次要下載中文字型，約 7MB）…");
       const { bytes } = await makeWebPdf(title, `${origin}/　資料來源：資安考題練習・${data.source || paper.kind || ""}`, quizBlocks(origin, data, ansEnd), { dark });

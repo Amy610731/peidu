@@ -14,7 +14,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon192.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/icon180.png">
-<link rel="stylesheet" href="style.css?v=20261020e">
+<link rel="stylesheet" href="style.css?v=20261020f">
 </head>
 <body>
 <div id="app">
@@ -246,7 +246,7 @@
         </select>
       </div>
     </section>
-    <p class="small" style="margin:0;opacity:.7">網站版本：20261020e（更新後如果看到的日期還是舊的，就把頁面重新整理）</p>
+    <p class="small" style="margin:0;opacity:.7">網站版本：20261020f（更新後如果看到的日期還是舊的，就把頁面重新整理）</p>
     <div class="modal-acts">
       <button type="button" id="keyClear" class="btn ghost">刪除金鑰</button>
       <button type="button" id="setClose" class="btn ghost">取消</button>
@@ -285,6 +285,7 @@
     <p class="small">整份考卷的題目、選項、答案（有詳解的也一起）會排成一份講義，一份一個檔案。</p>
     <label class="quiz-opt"><input type="checkbox" id="quizAnsEnd"> 答案放在最後面（想先自己作答）</label>
     <label class="quiz-opt"><input type="checkbox" id="quizDark"> 🌙 深色版（黑底白字）</label>
+    <label class="quiz-opt"><input type="checkbox" id="quizAI"> 🤖 沒有詳解的題目，請 Gemini 補 ABCD 解析（會標示「僅供參考」，一份要多等約 1～2 分鐘）</label>
     <div id="quizList" class="quiz-list"></div>
     <div class="modal-acts"><button type="button" id="quizCancel" class="btn ghost">取消</button></div>
   </div>
@@ -334,9 +335,9 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="mindmap.js?v=20261020e"></script>
-<script src="pomodoro.js?v=20261020e"></script>
-<script src="live.js?v=20261020e"></script>
-<script src="app.js?v=20261020e"></script>
+<script src="mindmap.js?v=20261020f"></script>
+<script src="pomodoro.js?v=20261020f"></script>
+<script src="live.js?v=20261020f"></script>
+<script src="app.js?v=20261020f"></script>
 </body>
 </html>
