@@ -956,6 +956,9 @@
       url: LOCAL ? `${location.origin}/_star/sec2/?embed=1` : "https://amy610731.github.io/l23-map/sec2/?embed=1" },
     { id: "sec1", name: "資安科目一星圖", sub: "資訊安全工程師初級・科目一", subject: "iPAS「資訊安全工程師初級」的科目一",
       url: LOCAL ? `${location.origin}/_star/sec1/?embed=1` : "https://amy610731.github.io/l23-map/sec1/?embed=1" },
+    // 考前大猜題（資安初級兩科各 50 題自編仿真題，2026-10-28）：一次一題，送來的是「畫面上這一題」
+    { id: "mock", kind: "mock", name: "考前大猜題", sub: "資安初級・科目一＋二 各 50 題仿真卷", subject: "iPAS「資訊安全工程師初級」的考前仿真卷（科目一、科目二）",
+      url: LOCAL ? `${location.origin}/_star/mock/?embed=1` : "https://amy610731.github.io/l23-map/mock/?embed=1" },
   ];
   const STAR = { t: 0, answers: {} };
   const starOrigin = m => { try { return new URL(m.url).origin; } catch { return ""; } };
@@ -996,7 +999,10 @@
     const L = [];
     L.push(`【考點】${t.title}（${[t.sectionName, t.chapter].filter(Boolean).join("｜")}）`);
     if (t.focusQi != null && t.quiz[t.focusQi]) L.push(`【她現在畫面上正在做的是第 ${t.focusQi + 1} 題${t.notebook ? "（錯題本重做：這題她之前答錯過）" : ""}。她說「考我」「這題」就是這一題。】`);
-    L.push(t.examHits ? `官方公告試題考過 ${t.examHits} 次（${(t.examRefs || []).join("、")}）` : "官方公告試題還沒考過這個考點");
+    if (t.kind === "mock") {
+      L.push("這是考前大猜題的自編仿真題，不是官方試題。" + (t.why ? `猜題理由：${t.why}` : ""));
+      if (t.mode === "exam") L.push("【她正在用「考試模式」寫，交卷前畫面不會顯示答案。她作答或問你時，不要說對錯、不要講答案或暗示，只能幫她把題意、名詞講清楚；等她交卷（會收到她的作答結果）才講解。】");
+    } else L.push(t.examHits ? `官方公告試題考過 ${t.examHits} 次（${(t.examRefs || []).join("、")}）` : "官方公告試題還沒考過這個考點");
     if (t.summary) L.push(`白話說明：${t.summary}`);
     if (t.keyPoints.length) L.push("重點：" + t.keyPoints.map((k, i) => `${i + 1}. ${k}`).join(" "));
     if (t.trap) L.push(`常見陷阱：${t.trap}`);
@@ -1019,6 +1025,7 @@
     const arr = (a, n, f) => (Array.isArray(a) ? a.slice(0, n).map(f) : []);
     return {
       id: clip(raw.id, 40), title: clip(raw.title, 60), notebook: !!raw.notebook,
+      kind: raw.kind === "mock" ? "mock" : "", mode: raw.mode === "exam" ? "exam" : "practice", why: clip(raw.why, 300),
       focusQi: Number.isInteger(raw.focusQi) && raw.focusQi >= 0 && raw.focusQi < 8 ? raw.focusQi : null, sectionName: clip(raw.sectionName, 60), chapter: clip(raw.chapter, 60),
       examHits: +raw.examHits || 0, examRefs: arr(raw.examRefs, 6, x => clip(x, 30)),
       summary: clip(raw.summary, 900), keyPoints: arr(raw.keyPoints, 8, x => clip(x, 300)), trap: clip(raw.trap, 400),
@@ -1031,7 +1038,9 @@
   // 點了新考點／回到總覽：連線中就偷偷告訴老師（不要它回應）；沒連線的話，下次連線時 getConfig 會帶進去
   function starSetTopic(t) {
     const same = t && S.topic && S.topic.id === t.id;  // 同一個考點只是換題（錯題本重做）：只通知換到第幾題，不重送整份資料
+    const modeOnly = same && t.kind === "mock" && t.mode !== S.topic.mode;  // 大猜題同一題只是換了練習／考試模式（或交卷）：要重送，老師才知道能不能講答案
     S.topic = t; if (!same) STAR.answers = {};
+    if (modeOnly) { clearTimeout(STAR.t); if (PeiduLive.isOn()) STAR.t = setTimeout(() => { if (PeiduLive.isOn() && S.star) PeiduLive.sendText(`（這則不用回應，只是讓你知道：學生切換成${t.mode === "exam" ? "考試模式（交卷前不要講答案）" : "練習模式或已交卷，可以講解"}。目前畫面上的題目如下）\n${starTopicText(t)}`, false); }, 500); return; }
     clearTimeout(STAR.t);
     if (!PeiduLive.isOn()) return;
     if (same && t.focusQi != null) {
@@ -1067,8 +1076,11 @@
     else if (m.type === "home") starSetTopic(null);
     else if (m.type === "answer" || m.type === "reveal") starAnswered(m);
   });
+  const STAR_INTRO = map => map.kind === "mock"
+    ? `學生正在用「考前大猜題」仿真卷練習${map.subject}。畫面一次顯示一題四選一的題目，她換題時你會收到「畫面上這一題」的資料（下面說的「考點」就是指這一題）。這次沒有講義頁面，也沒有螢光筆；她說的「這題」「這個」就是畫面上這一題。她說「下一題」時，請她在畫面上按「下一題」，你會收到新題目再出題；你只看得到畫面上這一題，不要自己編題目。`
+    : `學生正在用星圖複習${map.subject}。畫面上是一張考點星圖，她點開一個考點，畫面就會顯示白話說明、重點、陷阱和練習題。這次沒有講義頁面，也沒有螢光筆；她說的「這題」「這個」指的是她目前點開的考點，或它的練習題。`;
   const STAR_RULES = map => `=== 星圖練習模式（和上面「講義」「這一頁」有衝突的地方，以這一段為準）===
-學生正在用星圖複習${map.subject}。畫面上是一張考點星圖，她點開一個考點，畫面就會顯示白話說明、重點、陷阱和練習題。這次沒有講義頁面，也沒有螢光筆；她說的「這題」「這個」指的是她目前點開的考點，或它的練習題。
+${STAR_INTRO(map)}
 你的任務是用口頭問答幫她練習和複習：
 - 她說「考我」「出題」「開始」「下一題」時，從目前考點的練習題挑一題（照順序；她指定第幾題就照她說的），用口語把題幹和每個選項念給她聽，念完停下來等她回答。出題這一段可以不受「120 字以內」的限制，但選項要念清楚、不要念出標點符號；題幹太長、有程式碼或公式時，用口語簡述重點，並說「完整題目在畫面上」。
 - 她回答之前，絕對不能先講答案，也不能暗示答案。她回答之後：答對了，用一兩句講為什麼對，順便點出最容易混淆的那個選項；答錯了，先不要公佈答案，用你自己的話給一個提示引導她再想一次（資料裡的提示只是參考，不要照念，更不要把它當成答案念出來）；她說「不知道」「直接告訴我」，或第二次還答錯，才公佈正確答案並講解。
@@ -1901,7 +1913,9 @@
     const body = $("#sideBody");
     const parts = [];
     if (!S.chat.length && !S.sys.length && !LIVE.caption) {
-      parts.push(S.star
+      parts.push(S.star && S.star.kind === "mock"
+        ? `<div class="hint">在左邊（手機在上面）寫題目，按下面的 <b>🎙️ 開始陪讀</b>，說「<b>考我</b>」老師就念畫面上這一題給你聽；寫完說「<b>這題為什麼</b>」請老師講解。<br>考試模式交卷前，老師不會告訴你答案對不對。不方便說話時可以在下面打字。</div>`
+        : S.star
         ? `<div class="hint">先在星圖上點一個考點，按下面的 <b>🎙️ 開始陪讀</b>，然後說「<b>考我</b>」，老師會用說的出題，你直接口頭回答。<br>也可以問「這是什麼意思」「跟某某差在哪」；不方便說話時可以在下面打字。</div>`
         : `<div class="hint">按下面的 <b>🎙️ 開始陪讀</b>，直接說話問老師；老師說話時也可以直接插話。<br>不方便說話時，可以在下面打字問（老師一樣用說的回答）。</div>`);
     }
