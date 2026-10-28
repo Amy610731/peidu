@@ -964,6 +964,9 @@
       url: LOCAL ? `${location.origin}/_star/sec2/?embed=1` : "https://amy610731.github.io/l23-map/sec2/?embed=1" },
     { id: "sec1", name: "資安科目一星圖", sub: "資訊安全工程師初級・科目一", subject: "iPAS「資訊安全工程師初級」的科目一",
       url: LOCAL ? `${location.origin}/_star/sec1/?embed=1` : "https://amy610731.github.io/l23-map/sec1/?embed=1" },
+    // 營運智慧分析師初級 考科一（2026-10-28）：沒有公開考古題，題目全部是學習指引章末練習題（kind:"guide"）
+    { id: "ops1", kind: "guide", name: "營運科目一星圖", sub: "營運智慧分析師初級・考科一 營運智慧概論", subject: "iPAS「營運智慧分析師初級」的考科一（營運智慧概論）",
+      url: LOCAL ? `${location.origin}/_star/ops1/?embed=1` : "https://amy610731.github.io/l23-map/ops1/?embed=1" },
     // 考前大猜題（資安初級兩科各 50 題自編仿真題，2026-10-28）：一次一題，送來的是「畫面上這一題」
     { id: "mock", kind: "mock", name: "考前大猜題", sub: "資安初級・科目一＋二 各 50 題仿真卷", subject: "iPAS「資訊安全工程師初級」的考前仿真卷（科目一、科目二）",
       url: LOCAL ? `${location.origin}/_star/mock/?embed=1` : "https://amy610731.github.io/l23-map/mock/?embed=1" },
@@ -1010,7 +1013,8 @@
     if (t.kind === "mock") {
       L.push("這是考前大猜題的自編仿真題，不是官方試題。" + (t.why ? `猜題理由：${t.why}` : ""));
       if (t.mode === "exam") L.push("【她正在用「考試模式」寫，交卷前畫面不會顯示答案。她作答或問你時，不要說對錯、不要講答案或暗示，只能幫她把題意、名詞講清楚；等她交卷（會收到她的作答結果）才講解。】");
-    } else L.push(t.examHits ? `官方公告試題考過 ${t.examHits} 次（${(t.examRefs || []).join("、")}）` : "官方公告試題還沒考過這個考點");
+    } else if (S.star && S.star.kind === "guide") L.push(`這一科沒有公開的考古題，練習題全部來自官方學習指引的章末練習題（這個考點有 ${t.quiz.length} 題）；答案以指引公布的為準。`);
+    else L.push(t.examHits ? `官方公告試題考過 ${t.examHits} 次（${(t.examRefs || []).join("、")}）` : "官方公告試題還沒考過這個考點");
     if (t.summary) L.push(`白話說明：${t.summary}`);
     if (t.keyPoints.length) L.push("重點：" + t.keyPoints.map((k, i) => `${i + 1}. ${k}`).join(" "));
     if (t.trap) L.push(`常見陷阱：${t.trap}`);
