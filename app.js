@@ -1941,7 +1941,8 @@ ${STAR_INTRO(map)}
     S.chat.forEach((m, i) => {
       parts.push(sysAt(i));
       const mine = m.role !== "claude";
-      parts.push(`<div class="msg ${mine ? "amy" : "claude"}" data-id="${esc(m.id)}"><span class="txt">${esc(m.text)}</span><div class="mmeta"><span>${mine ? "我" : "老師"} · ${S.star ? esc(m.topic || "星圖") : "p." + (+m.page)}</span>${mine || S.star ? "" : `<button type="button" data-act="pin">📌 記到這頁</button>`}</div></div>`);
+      const wc = !mine && PeiduLive.wordCardHTML ? PeiduLive.wordCardHTML(m.text, esc) : "";
+      parts.push(`<div class="msg ${mine ? "amy" : "claude"}${wc ? " wc" : ""}" data-id="${esc(m.id)}"><span class="txt">${wc || esc(m.text)}</span><div class="mmeta"><span>${mine ? "我" : "老師"} · ${S.star ? esc(m.topic || "星圖") : "p." + (+m.page)}</span>${mine || S.star ? "" : `<button type="button" data-act="pin">📌 記到這頁</button>`}</div></div>`);
     });
     parts.push(S.sys.filter(s => s.after >= S.chat.length).map(s => `<div class="sys">${esc(s.text)}</div>`).join(""));
     const c = LIVE.caption;

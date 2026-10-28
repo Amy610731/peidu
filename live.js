@@ -605,7 +605,20 @@
     S.muted = v;
   }
 
-  g.PeiduLive = { ttsVoice,
+
+  // 「📖 單字卡：」訊息 → 黑底卡片（對話區用）；不是單字卡就回空字串
+  function wordCardHTML(text, esc) {
+    if (!/^📖 單字卡：/.test(text || "")) return "";
+    const lines = text.split("\n"), head = lines[0].replace(/^📖 單字卡：/, "").trim();
+    const hm = head.match(/^(.*?)（(.*)）$/), word = hm ? hm[1] : head, mean = hm ? hm[2] : "";
+    const get = re => { const l = lines.find(x => re.test(x)); return l ? l.replace(re, "").trim() : ""; };
+    const roots = get(/^① 字根拆解：/), kk = get(/^② KK 音標：/), syl = get(/^③ 音節：/);
+    const sylHTML = esc(syl).replace(/(^|[\s·•-])([A-Z]+)(?=$|[\s·•（(-])/g, '$1<b class="wc-stress">$2</b>');
+    const row = (cls, lb, v) => v ? `<span class="wc-row ${cls}"><span class="wc-lb">${lb}</span><span class="wc-v">${v}</span></span>` : "";
+    return `<span class="wcard"><span class="wc-word">${esc(word)}</span>${mean ? `<span class="wc-mean">${esc(mean)}</span>` : ""}` +
+      row("wc-root", "字根", esc(roots)) + row("wc-kk", "KK", esc(kk)) + row("wc-syl", "音節", sylHTML) + `</span>`;
+  }
+  g.PeiduLive = { wordCardHTML, ttsVoice,
     VOICES, start, stop, restart, sendText, setMuted,
     isOn: () => !!S, isMuted: () => !!(S && S.muted), status: () => (S ? S.lastStatus : "off"),
     stats: () => (S ? { model: S.model, ready: S.ready, micKind: S.mic && S.mic.kind, micRate: S.micRate,

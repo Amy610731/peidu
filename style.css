@@ -256,6 +256,17 @@ body.box .page, body.box .textLayer span { user-select: none; -webkit-user-selec
 .ann-acts button.del { color: var(--danger); }
 .ann textarea, .composer textarea, #chatIn { width: 100%; border: 1px solid var(--rule); border-radius: 12px; background: var(--panel-2); color: var(--ink); padding: 9px 12px; resize: vertical; line-height: 1.5; }
 
+/* 📖 單字卡：不管淺色深色畫面都是黑底卡片 */
+.msg.wc { background: transparent !important; border: 0 !important; padding: 0 !important; max-width: 96%; white-space: normal; }
+.wcard { display: block; background: #15171c; color: #eef0f3; border: 1px solid #2c313a; border-radius: 14px; padding: 12px 14px; box-shadow: 0 2px 8px rgba(0,0,0,.18); }
+.wcard .wc-word { display: block; font-size: 1.75em; font-weight: 800; letter-spacing: .5px; color: #fff; line-height: 1.2; }
+.wcard .wc-mean { display: block; color: #ffd479; font-weight: 700; margin: 3px 0 6px; }
+.wcard .wc-row { display: flex; gap: 8px; align-items: baseline; margin-top: 7px; line-height: 1.55; }
+.wcard .wc-lb { flex: none; font-size: .75em; font-weight: 700; padding: 1px 8px; border-radius: 999px; }
+.wcard .wc-root .wc-lb { background: #2d4a3a; color: #8ce99a; } .wcard .wc-root .wc-v { color: #c3f0cb; }
+.wcard .wc-kk .wc-lb { background: #23395b; color: #8fc1ff; } .wcard .wc-kk .wc-v { color: #a5d0ff; font-size: 1.12em; font-family: "Segoe UI", "Lucida Sans Unicode", "Noto Sans", sans-serif; }
+.wcard .wc-syl .wc-lb { background: #4a2f55; color: #e0a8ff; } .wcard .wc-syl .wc-v { color: #f1d6ff; letter-spacing: .5px; }
+.wcard .wc-stress { color: #ff8fab; font-weight: 800; }
 .msg { max-width: 92%; padding: 9px 12px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; }
 .msg.amy { align-self: flex-end; background: var(--accent); color: var(--accent-ink); border-bottom-right-radius: 4px; }
 .msg.claude { align-self: flex-start; background: var(--panel-2); border-bottom-left-radius: 4px; }
