@@ -243,9 +243,26 @@
     S.sources.clear(); S.playAt = 0;
   }
 
+  // 單字卡（教英文單字時老師呼叫 word_card）→ 一則文字，放進對話紀錄
+  function wordCardText(a) {
+    const L = [`📖 單字卡：${a.word || ""}${a.meaning ? "（" + a.meaning + "）" : ""}`];
+    if (a.roots) L.push("① 字根拆解：" + a.roots);
+    if (a.kk) L.push("② KK 音標：" + (/^\s*[\/\[]/.test(a.kk) ? a.kk.trim() : "/" + a.kk.trim() + "/"));
+    if (a.syllables) L.push("③ 音節：" + a.syllables);
+    return L.join("\n");
+  }
+
+  function cardFromText(text) {
+    const m = text.match(/(?:```(?:json)?\s*)?(\{[^{}]*"word"[^{}]*\})\s*(?:```)?/);
+    if (!m) return null;
+    try { const a = JSON.parse(m[1]); return a.word ? { args: a, rest: text.replace(m[0], "").trim() } : null; } catch (e) { return null; }
+  }
+
   function flushTurn() {
     if (!S) return;
-    const amy = S.amyText.trim(), claude = S.claudeText.trim();
+    let amy = S.amyText.trim(), claude = S.claudeText.trim();
+    const card = S.opts.onWordCard && cardFromText(claude);
+    if (card) { claude = card.rest; S.opts.onWordCard({ text: wordCardText(card.args), amy: tidy(amy), args: card.args }); amy = ""; }
     if (amy) S.lastAmy = amy;  // 換模型重問時要用
     S.amyText = ""; S.claudeText = "";
     if ((amy || claude) && S.opts.onTurn) S.opts.onTurn({ amy: tidy(amy), claude: tidy(claude) });
@@ -253,7 +270,7 @@
 
   function tools() {
     const o = S.opts;
-    if (!o.onLookup && !o.onHighlight) return {};
+    if (!o.onLookup && !o.onHighlight && !o.onWordCard) return {};
     return { tools: [{ functionDeclarations: [
       ...(o.onLookup ? [{
         name: "lookup",
@@ -270,6 +287,18 @@
           note: { type: "STRING", description: "一句話說明為什麼要記，繁體中文 30 字內" },
         }, required: ["text", "kind", "note"] },
       }] : []),
+      // 教英文單字：把單字卡（字根、KK 音標、音節）顯示在學生畫面上（音標用說的講不清楚）
+        ...(o.onWordCard ? [{
+          name: "word_card",
+          description: "學生要你教英文單字時，把單字卡顯示在學生的畫面上。開口講第一句後呼叫一次，接著再用說的一步一步教。",
+          parameters: { type: "OBJECT", properties: {
+            word: { type: "STRING", description: "英文單字" },
+            meaning: { type: "STRING", description: "中文意思，繁體中文，簡短" },
+            roots: { type: "STRING", description: "字首、字根、字尾拆解和合起來的意思，例如「con-（完全）＋ fid（相信）＋ -ence（名詞）→ 完全相信 → 信心」；拆不出來就寫聯想記法" },
+            kk: { type: "STRING", description: "KK 音標，含重音符號，例如 /ˈkɑnfədəns/" },
+            syllables: { type: "STRING", description: "用 · 分開音節，重音節用大寫，並註明重音在第幾節，例如「CON · fi · dence（重音在第 1 節）」" },
+          }, required: ["word", "meaning", "roots", "kk", "syllables"] },
+        }] : []),
     ] }] };
   }
 
@@ -304,7 +333,9 @@
         const calls = d.toolCall.functionCalls || [];
         // 答案講到一半叫工具（畫重點）：3.8 的聲音還會繼續傳好幾秒，不能這時就擋（會把話切掉），等這一輪結束才安靜；
         // 3.1 收到工具結果後常在同一輪「再講一次」，所以 3.1 維持一叫工具就擋
-        if ((S.turnOut || 0) > 15) { if (/3\.1/.test(S.model || "")) { S.quiet = true; S.quietUntil = performance.now() + 6000; } }
+        // 單字卡：Gemini 叫完卡片常先結束這一輪、下一輪才接著教 → 這一輪結束時不能安靜（不然後面的教學會被吃掉）
+        if (calls.some(fc => fc.name === "word_card")) { S.cardMore = 2; S.quiet = false; }
+        else if ((S.turnOut || 0) > 15) { if (/3\.1/.test(S.model || "")) { S.quiet = true; S.quietUntil = performance.now() + 6000; } }
         else S.toolPending = true;  // 還沒回答就先叫工具（例如先查資料）→ 答案在後面，要等它講
         const prev = S.lastStatus;
         if (calls.some(fc => fc.name === "lookup")) status("looking");
@@ -315,6 +346,11 @@
             try { result = await S.opts.onHighlight(args); } catch (e) { result = "沒標成功：" + e.message + "（原文要逐字複製講義上的字）"; }
           } else if (fc.name === "lookup" && S && S.opts.onLookup) {
             try { result = await S.opts.onLookup(args.query || ""); } catch (e) { result = "查詢失敗：" + e.message; }
+          } else if (fc.name === "word_card" && S && S.opts.onWordCard) {
+            // 她剛剛說的話先記（卡片才會排在她的問題後面）；這一輪結束時就不會再記一次
+            const amy = S.amyText.trim(); if (amy) S.lastAmy = amy; S.amyText = "";
+            try { await S.opts.onWordCard({ text: wordCardText(args), amy: tidy(amy), args }); result = "單字卡已經顯示在學生畫面上，接著用說的一步一步教"; }
+            catch (e) { result = "卡片沒顯示成功，直接用說的教就好"; }
           } else result = "沒有這個工具";
           return { id: fc.id, name: fc.name, response: { result: result || "好了" } };
         }));
@@ -328,7 +364,7 @@
       if (!sc) return;
       // 她開口（插話／有字幕）＝新的一輪
       if (sc.inputTranscription && sc.inputTranscription.text) { S.resumeCount = 0; S.lastAskAt = performance.now(); }
-      if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; S.toolPending = false; }
+      if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; S.toolPending = false; S.cardMore = false; }
       // 講完之後沒人問、模型卻自己又講（畫完重點再講一次、自己跳下一題）→ 不放、不記。
       // 只擋講完後的幾秒（實測自言自語都在 1.3 秒內冒出來）；她的字幕 3.8 常常很晚才到，擋太久會把她下一題的回答吃掉
       if (S.quiet && performance.now() > (S.quietUntil || 0)) S.quiet = false;
@@ -375,7 +411,7 @@
         const said = (S.turnOut || 0) > 0;
         flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false;
         // 3.8 叫完工具會先結束一輪、下一輪才講答案 → 還沒講到答案就不要安靜
-        if (S.toolPending && !said) { /* 等答案 */ } else { S.toolPending = false; S.quiet = true; S.quietUntil = performance.now() + 4000; }
+        if (S.toolPending && !said) { /* 等答案 */ } else if (S.cardMore) { S.cardMore--; S.toolPending = false; /* 單字卡後面還有教學（可能分兩輪講），等它講 */ } else { S.toolPending = false; S.quiet = true; S.quietUntil = performance.now() + 4000; }
       }
     };
     ws.onclose = e => {
@@ -553,7 +589,7 @@
   function sendText(text, turnComplete = true) {
     if (!S) return false;
     if (turnComplete) { S.sentAt = performance.now(); S.lastAskAt = S.sentAt; } else S.lastNoticeAt = performance.now();
-    if (turnComplete) { stopPlayback(); S.lastText = text; S.amyText = ""; S.lastSendAt = performance.now(); S.firstAudioAt = 0; S.quiet = false; S.toolPending = false; }
+    if (turnComplete) { stopPlayback(); S.lastText = text; S.amyText = ""; S.lastSendAt = performance.now(); S.firstAudioAt = 0; S.quiet = false; S.toolPending = false; S.cardMore = false; }
     const msg = JSON.stringify({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete } });
     if (S.ready && S.ws && S.ws.readyState === 1) S.ws.send(msg); else S.queued.push(msg);
     return true;
