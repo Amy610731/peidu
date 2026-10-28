@@ -334,7 +334,7 @@
         // 答案講到一半叫工具（畫重點）：3.8 的聲音還會繼續傳好幾秒，不能這時就擋（會把話切掉），等這一輪結束才安靜；
         // 3.1 收到工具結果後常在同一輪「再講一次」，所以 3.1 維持一叫工具就擋
         // 單字卡：Gemini 叫完卡片常先結束這一輪、下一輪才接著教 → 這一輪結束時不能安靜（不然後面的教學會被吃掉）
-        if (calls.some(fc => fc.name === "word_card")) { S.cardMore = 2; S.quiet = false; }
+        if (calls.some(fc => fc.name === "word_card")) { S.cardMore = 2; S.cardNudged = false; S.quiet = false; }
         else if ((S.turnOut || 0) > 15) { if (/3\.1/.test(S.model || "")) { S.quiet = true; S.quietUntil = performance.now() + 6000; } }
         else S.toolPending = true;  // 還沒回答就先叫工具（例如先查資料）→ 答案在後面，要等它講
         const prev = S.lastStatus;
@@ -408,10 +408,12 @@
       if (ttsOn() && (sc.generationComplete || sc.turnComplete)) ttsFeed("", true);  // 最後一句沒標點也要念
       if (sc.interrupted) flushTurn();
       if (sc.turnComplete) {
-        const said = (S.turnOut || 0) > 0;
+        const said = (S.turnOut || 0) > 0, turnText = S.claudeText || "";
         flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false;
+        // 單字卡教到「請她跟著念」了：之後照常安靜，老師才不會自己又接著講、蓋過她念
+        if (S.cardMore && /跟著|跟我|換你|念一遍|唸一遍|念一次|唸一次|試試/.test(turnText)) S.cardMore = 0;
         // 3.8 叫完工具會先結束一輪、下一輪才講答案 → 還沒講到答案就不要安靜
-        if (S.toolPending && !said) { /* 等答案 */ } else if (S.cardMore) { S.cardMore--; S.toolPending = false; /* 單字卡後面還有教學（可能分兩輪講），等它講 */ } else { S.toolPending = false; S.quiet = true; S.quietUntil = performance.now() + 4000; }
+        if (S.toolPending && !said) { /* 等答案 */ } else if (S.cardMore) { S.cardMore--; S.toolPending = false; if (turnText.trim()) armCardNudge(); /* 單字卡後面還有教學（可能分兩輪講），等它講；停在半路就提醒 */ } else { S.toolPending = false; S.quiet = true; S.quietUntil = performance.now() + 4000; }
       }
     };
     ws.onclose = e => {
@@ -586,6 +588,23 @@
   }
 
   // 傳一段文字給老師：turnComplete=true 表示「請回答」；false＝只是補充資料（例如翻頁了）
+  // 單字卡教到一半 Gemini 自己停了（還沒請她跟念）：等聲音播完、她沒開口、Gemini 也沒接著講，就在背後提醒它教完（每張卡只提醒一次）
+  function armCardNudge() {
+    if (!S || S.cardNudged) return;
+    const mine = S, t0 = performance.now();
+    let idle = 0;
+    clearTimeout(S.cardNudgeT);
+    const tick = () => {
+      if (S !== mine || !S.ready || S.cardNudged) return;
+      if ((S.turnOut || 0) > 0 || S.amyText.trim()) return;  // Gemini 又開始講了／她開口了 → 不用提醒
+      idle = S.sources.size ? 0 : idle + 1;                   // 聲音播完後再多等一下
+      if (idle < 3) { if (performance.now() - t0 < 60000) S.cardNudgeT = setTimeout(tick, 500); return; }
+      S.cardNudged = true;
+      sendText("（請接著把這個單字教完：一節一節念音節、說出重音在第幾節，用美式發音先慢慢念、再用正常速度念一次，最後請她跟著念，然後停下來等她。前面講過的不要重講。）", true);
+    };
+    S.cardNudgeT = setTimeout(tick, 1500);
+  }
+
   function sendText(text, turnComplete = true) {
     if (!S) return false;
     if (turnComplete) { S.sentAt = performance.now(); S.lastAskAt = S.sentAt; } else S.lastNoticeAt = performance.now();
