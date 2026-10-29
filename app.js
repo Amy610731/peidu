@@ -967,6 +967,9 @@
     // 營運智慧分析師初級 考科一（2026-10-28）：沒有公開考古題，題目全部是學習指引章末練習題（kind:"guide"）
     { id: "ops1", kind: "guide", name: "營運科目一星圖", sub: "營運智慧分析師初級・考科一 營運智慧概論", subject: "iPAS「營運智慧分析師初級」的考科一（營運智慧概論）",
       url: LOCAL ? `${location.origin}/_star/ops1/?embed=1` : "https://amy610731.github.io/l23-map/ops1/?embed=1" },
+    // 營運智慧分析師初級 考科二（2026-10-29）：同樣沒有公開考古題，題目全部是學習指引章末練習題
+    { id: "ops2", kind: "guide", name: "營運科目二星圖", sub: "營運智慧分析師初級・考科二 經營管理數位化概論", subject: "iPAS「營運智慧分析師初級」的考科二（經營管理數位化概論）",
+      url: LOCAL ? `${location.origin}/_star/ops2/?embed=1` : "https://amy610731.github.io/l23-map/ops2/?embed=1" },
     // 考前大猜題（資安初級兩科各 50 題自編仿真題，2026-10-28）：一次一題，送來的是「畫面上這一題」
     { id: "mock", kind: "mock", name: "考前大猜題", sub: "資安初級・科目一＋二 各 50 題仿真卷", subject: "iPAS「資訊安全工程師初級」的考前仿真卷（科目一、科目二）",
       url: LOCAL ? `${location.origin}/_star/mock/?embed=1` : "https://amy610731.github.io/l23-map/mock/?embed=1" },
