@@ -892,7 +892,8 @@
   $("#urlBtn").onclick = () => { $("#urlIn").value = ""; $("#urlDark").checked = !!LS.get("peidu-phone-webdark", false); $("#urlBox").hidden = false; setTimeout(() => $("#urlIn").focus(), 50); };
   $("#urlCancel").onclick = () => { $("#urlBox").hidden = true; };
   $("#urlBox").addEventListener("click", e => { if (e.target.id === "urlBox") $("#urlBox").hidden = true; });
-  $("#urlOk").onclick = () => { const v = $("#urlIn").value; if (!v.trim()) return toast("先貼上網址"); $("#urlBox").hidden = true; LS.set("peidu-phone-webdark", $("#urlDark").checked); addWebPage(v, $("#urlDark").checked); };
+  $("#urlOk").onclick = () => { const v = $("#urlIn").value; if (!v.trim()) return toast("先貼上網址"); $("#urlBox").hidden = true; openWebInput(v); };
+  $("#urlPdf").onclick = () => { const v = $("#urlIn").value; if (!v.trim()) return toast("先貼上網址"); $("#urlBox").hidden = true; LS.set("peidu-phone-webdark", $("#urlDark").checked); addWebPage(v, $("#urlDark").checked); };
   $("#urlIn").addEventListener("keydown", e => { if (e.key === "Enter") $("#urlOk").click(); });
 
   // ================= 開啟文件 =================
@@ -991,6 +992,110 @@
     const b = e.target.closest("[data-star]"); if (!b) return;
     const m = STAR_MAPS.find(x => x.id === b.dataset.star); if (m) openStar(m);
   });
+  // ================= 🌐 網頁陪讀（像電腦版擴充套件：左邊網頁、右邊老師；不轉 PDF） =================
+  // 用星圖的版面（#starFrame）。老師讀的文字：先用 Jina Reader 抓網頁文字；字太少（心智圖這類互動網頁，字藏在網頁背後的資料裡）
+  // 就請 Jina 給原始碼，把裡面的 JSON 資料整理成大綱。網頁不給跨站讀，所以都透過 Jina。
+  const WEB_RECENT = "peidu-phone-web-recent";
+  function renderWebRecent() {
+    const a = LS.get(WEB_RECENT, []);
+    $("#webRecent").hidden = $("#webRecentLabel").hidden = !a.length;
+    $("#webRecent").innerHTML = a.map(x => `<button type="button" class="star-btn" data-url="${esc(x.url)}"><b>🌐 ${esc(x.title || x.url)}</b><small>${esc(x.url.replace(/^https?:\/\//, "").slice(0, 70))}</small></button>`).join("");
+  }
+  function rememberWeb(url, title) {
+    const a = LS.get(WEB_RECENT, []).filter(x => x.url !== url);
+    a.unshift({ url, title });
+    LS.set(WEB_RECENT, a.slice(0, 6));
+    renderWebRecent();
+  }
+  $("#webRecent").addEventListener("click", e => { const b = e.target.closest("[data-url]"); if (b) openWeb(b.dataset.url); });
+  function openWebInput(input) {
+    const raw = ((input || "").match(/https?:\/\/[^\s<>"']+/i) || [(input || "").trim()])[0];
+    let url;
+    try { url = new URL(/^https?:\/\//i.test(raw) ? raw : "https://" + raw); if (!/\./.test(url.hostname)) throw 0; }
+    catch { return toast("這不像網址，請貼上 https:// 開頭的網址"); }
+    openWeb(url.href);
+  }
+  // JSON 資料 → 縮排大綱（只留文字，拿掉圖片、網址、代碼）
+  function jsonOutline(v, depth = 0, out = { lines: [], len: 0 }) {
+    if (out.len > 60000) return out;
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (t.length >= 2 && !/^(data:|https?:|blob:|#|\/)/.test(t) && !/^[0-9a-f-]{12,}$/i.test(t)) { const l = "  ".repeat(depth) + "- " + t.replace(/\s+/g, " "); out.lines.push(l); out.len += l.length; }
+    } else if (Array.isArray(v)) v.forEach(x => jsonOutline(x, depth, out));
+    else if (v && typeof v === "object") {
+      for (const k of Object.keys(v)) if (typeof v[k] === "string") jsonOutline(v[k], depth, out);
+      for (const k of Object.keys(v)) if (v[k] && typeof v[k] === "object") jsonOutline(v[k], depth + 1, out);
+    }
+    return out;
+  }
+  async function webText(url) {
+    let title = "", text = "";
+    try {
+      const r = await fetch("https://r.jina.ai/" + url);
+      if (r.ok) {
+        const raw = await r.text(), i = raw.indexOf("Markdown Content:");
+        title = ((raw.match(/^Title:[ \t]*(.*)$/m) || [])[1] || "").trim();
+        text = mdToBlocks(i >= 0 ? raw.slice(i + 17) : raw).map(b => b.s || "").filter(Boolean).join("\n");
+      }
+    } catch { /* 下面再試原始碼 */ }
+    if (text.replace(/\s/g, "").length < 800) {
+      try {
+        const r = await fetch("https://r.jina.ai/" + url, { headers: { "X-Return-Format": "html" } });
+        if (r.ok) {
+          const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+          const data = [];
+          for (const sc of doc.querySelectorAll("script:not([src])")) {
+            const t = sc.textContent.trim();
+            if (/^[\[{]/.test(t)) { try { const o = jsonOutline(JSON.parse(t)); if (o.lines.length > 5) data.push(o.lines.join("\n")); } catch { /* 不是 JSON */ } }
+          }
+          doc.querySelectorAll("script,style,noscript,svg").forEach(n => n.remove());
+          if (!title) title = (doc.title || "").trim();
+          const body = (doc.body ? doc.body.textContent : "").replace(/\s+/g, " ").trim();
+          if (data.length) text = data.join("\n\n") + (body ? "\n\n（網頁畫面上的其他文字）" + body : "");
+          else if (body.length > text.length) text = body;
+        }
+      } catch { /* 讀不到就算了 */ }
+    }
+    return { title, text: text.slice(0, 40000) };
+  }
+  async function openWeb(url) {
+    closeDoc();
+    const seq = ++S.openSeq;
+    let hsh = 0; for (const c of url) hsh = (hsh * 31 + c.charCodeAt(0)) | 0;
+    const host = new URL(url).hostname;
+    S.doc = { id: "__web_" + (hsh >>> 0).toString(36), name: host, virtual: true, pageCount: 0 };
+    S.star = { id: "web", kind: "web", name: host, url, subject: host, webText: "", loading: true };
+    S.topic = null; S.page = 1; STAR.answers = {};
+    showView("reader");
+    $("#reader").classList.add("star");
+    $("#docName").textContent = "🌐 " + host;
+    $("#starFrame").src = url;
+    setTab("chat");
+    try {
+      const chat = await dbByDoc("chat", S.doc.id);
+      if (seq !== S.openSeq) return;
+      S.chat = (chat || []).sort((a, b) => String(a.created).localeCompare(String(b.created)));
+    } catch { /* 讀不到對話紀錄就從空的開始 */ }
+    renderSide();
+    toast("老師正在讀這個網頁…", 2500);
+    const info = await webText(url);
+    if (seq !== S.openSeq || !S.star || S.star.kind !== "web") return;
+    S.star.webText = info.text; S.star.loading = false;
+    if (info.title) { S.star.name = info.title; $("#docName").textContent = "🌐 " + info.title; }
+    rememberWeb(url, info.title || host);
+    if (!info.text) toast("這個網頁的文字讀不到（可能要登入），老師只能聽你描述畫面", 5000);
+    else {
+      toast(`老師讀好網頁了（約 ${info.text.length} 字），按下面的麥克風就能討論`, 3500);
+      if (PeiduLive.isOn()) PeiduLive.sendText("（這則不用回應，只是讓你知道：網頁內容讀好了，如下）\n" + info.text, false);
+    }
+  }
+  const WEB_RULES = w => `=== 網頁陪讀模式（和上面「講義」「這一頁」有衝突的地方，以這一段為準）===
+學生在畫面左邊開著一個網頁（${w.name}，${w.url}），下面是這個網頁的文字內容。心智圖這類互動網頁是從網頁背後的資料整理成大綱的，她畫面上可能只展開了其中一部分。
+- 她問「這個」「這裡」「這一段」通常是指網頁上她正在看的內容；不確定是哪一段就簡短問她是哪個節點或標題。
+- 這次沒有螢光筆可以用。
+- 她說「考我」就從網頁內容出一題選擇題口頭考她，念完選項停下來等她回答，她回答之前不能講答案。
+- 網頁內容沒有寫的觀念照樣用你的知識補充，但要說清楚哪些是網頁寫的、哪些是你補充的。`;
+
   async function openStar(map) {
     closeDoc();
     const seq = ++S.openSeq;
@@ -1106,11 +1211,17 @@ ${STAR_INTRO(map)}
 - 收到「（這則不用回應…）」開頭、說她在畫面上點了別的考點或作答的訊息，不要出聲，只要記住：之後以最新的考點為準；她在畫面上作答的結果算她已經回答過那一題，她問「我答對了嗎」就照結果回答。
 - 如果現在沒有點開任何考點：她想練習，就請她先在星圖上點一個考點，或請她說想練哪個主題，你就口頭出一題概念題。`;
   function liveSystemStar() {
+    if (S.star && S.star.kind === "web") {  // 網頁陪讀：情境是網頁內容
+      const rules = LIVE_RULES.split("\n").filter(l => !/^- 你有一個 highlight/.test(l)).join("\n");
+      const w = S.star, body = w.webText || (w.loading ? "（網頁還在讀取，讀好會另外傳給你）" : "（讀不到網頁文字：請她描述畫面或念給你聽）");
+      return [rules, TUTOR, WEB_RULES(w), personaText(), `=== 網頁內容 ===\n${body}`].join("\n\n");
+    }
     const rules = LIVE_RULES.split("\n").filter(l => !/^- 你有一個 highlight/.test(l) && !/^- 她問「這題」「這段」/.test(l)).join("\n");
     const ctx = S.topic ? `=== 學生目前點開的考點 ===\n${starTopicText(S.topic)}` + (Object.keys(STAR.answers).length ? "\n她在畫面上已經作答：" + Object.values(STAR.answers).join("") : "") : "=== 學生還沒有點開任何考點 ===";
     return [rules, TUTOR, STAR_RULES(S.star), personaText(), ctx].join("\n\n");
   }
   renderStarList();
+  renderWebRecent();
 
   // ================= 頁面渲染 =================
   const viewer = $("#viewer");
@@ -1941,6 +2052,8 @@ ${STAR_INTRO(map)}
     if (!S.chat.length && !S.sys.length && !LIVE.caption) {
       parts.push(S.star && S.star.kind === "mock"
         ? `<div class="hint">在左邊（手機在上面）寫題目，按下面的 <b>🎙️ 開始陪讀</b>，說「<b>考我</b>」老師就念畫面上這一題給你聽；寫完說「<b>這題為什麼</b>」請老師講解。<br>考試模式交卷前，老師不會告訴你答案對不對。不方便說話時可以在下面打字。</div>`
+        : S.star && S.star.kind === "web"
+        ? `<div class="hint">左邊是網頁，照常點、展開都可以。按下面的 <b>🎙️ 開始陪讀</b>，直接問老師網頁上的內容，例如「PDCA 的 Check 是什麼」「考我這一段」。<br>英文單字可以說「教我這個單字」。</div>`
         : S.star
         ? `<div class="hint">先在星圖上點一個考點，按下面的 <b>🎙️ 開始陪讀</b>，然後說「<b>考我</b>」，老師會用說的出題，你直接口頭回答。<br>也可以問「這是什麼意思」「跟某某差在哪」；不方便說話時可以在下面打字。</div>`
         : `<div class="hint">按下面的 <b>🎙️ 開始陪讀</b>，直接說話問老師；老師說話時也可以直接插話。<br>不方便說話時，可以在下面打字問（老師一樣用說的回答）。</div>`);

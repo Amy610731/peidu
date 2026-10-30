@@ -14,7 +14,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon192.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/icon180.png">
-<link rel="stylesheet" href="style.css?v=20261029a">
+<link rel="stylesheet" href="style.css?v=20261030a">
 </head>
 <body>
 <div id="app">
@@ -29,10 +29,12 @@
       <div class="shelf-actions">
         <button id="addBtn" class="btn primary big" type="button">＋ 加入 PDF 講義</button>
         <input id="addFile" type="file" accept="application/pdf,.pdf" hidden>
-        <button id="urlBtn" class="btn big" type="button">🌐 貼網址</button>
+        <button id="urlBtn" class="btn big" type="button">🌐 網頁陪讀</button>
       </div>
       <p class="shelf-label">星圖（點考點 → 老師口頭出題）</p>
       <div id="starList" class="star-list"></div>
+      <p id="webRecentLabel" class="shelf-label" hidden>最近開過的網頁</p>
+      <div id="webRecent" class="star-list" hidden></div>
       <div id="uploading" class="uploading" hidden><span class="spinner"></span><span id="uploadingText">正在加入…</span></div>
       <p id="keyNote" class="note-line" hidden>還沒設定 Gemini 金鑰：讀講義、畫重點可以先用；要語音討論請按右上角 ⚙️ 貼上金鑰。</p>
       <p id="shelfLabel" class="shelf-label" hidden>我的講義</p>
@@ -246,7 +248,7 @@
         </select>
       </div>
     </section>
-    <p class="small" style="margin:0;opacity:.7">網站版本：20261029a（更新後如果看到的日期還是舊的，就把頁面重新整理）</p>
+    <p class="small" style="margin:0;opacity:.7">網站版本：20261030a（更新後如果看到的日期還是舊的，就把頁面重新整理）</p>
     <div class="modal-acts">
       <button type="button" id="keyClear" class="btn ghost">刪除金鑰</button>
       <button type="button" id="setClose" class="btn ghost">取消</button>
@@ -267,14 +269,17 @@
 <!-- 🌐 貼網址 -->
 <div id="urlBox" class="modal" hidden>
   <div class="modal-card" role="dialog" aria-labelledby="urlTitle">
-    <h2 id="urlTitle">🌐 貼網址做陪讀</h2>
-    <p class="small">在 Safari 按「分享 → 拷貝」，回來長按下面的格子貼上。網頁的文字會排成一份講義放上書架，之後跟 PDF 一樣可以畫重點、跟老師討論。</p>
+    <h2 id="urlTitle">🌐 網頁陪讀</h2>
+    <p class="small">在 Safari 按「分享 → 拷貝」，回來長按下面的格子貼上。左邊會直接打開網頁（心智圖照樣可以點、展開），右邊老師讀這個網頁陪你討論，跟電腦版一樣。</p>
     <div class="key-row">
       <input id="urlIn" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…" aria-label="網址">
     </div>
-    <label class="quiz-opt"><input type="checkbox" id="urlDark"> 🌙 深色版（黑底白字）</label>
-    <p class="small">要登入才看得到的網頁讀不到；考題網站要按了才出現的答案也抓不到（這種請用 Safari「分享 → 選項 → PDF」存下來再加入）。</p>
-    <div class="modal-acts"><button type="button" id="urlCancel" class="btn ghost">取消</button><button type="button" id="urlOk" class="btn primary">加入</button></div>
+    <p class="small">要登入才看得到的網頁，老師讀不到內容；有些網站不讓別的網頁嵌入，左邊會一片空白（這種請用 Safari 開，再用分割畫面把陪讀放旁邊）。</p>
+    <details class="small"><summary>舊方式：做成 PDF 講義</summary>
+      <label class="quiz-opt"><input type="checkbox" id="urlDark"> 🌙 深色版（黑底白字）</label>
+      <button type="button" id="urlPdf" class="btn ghost">做成 PDF 講義</button>
+    </details>
+    <div class="modal-acts"><button type="button" id="urlCancel" class="btn ghost">取消</button><button type="button" id="urlOk" class="btn primary">開網頁陪讀</button></div>
   </div>
 </div>
 
@@ -335,9 +340,9 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="mindmap.js?v=20261029a"></script>
-<script src="pomodoro.js?v=20261029a"></script>
-<script src="live.js?v=20261029a"></script>
-<script src="app.js?v=20261029a"></script>
+<script src="mindmap.js?v=20261030a"></script>
+<script src="pomodoro.js?v=20261030a"></script>
+<script src="live.js?v=20261030a"></script>
+<script src="app.js?v=20261030a"></script>
 </body>
 </html>
