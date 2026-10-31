@@ -974,6 +974,12 @@
     // 考前大猜題（資安初級兩科各 50 題自編仿真題，2026-10-28）：一次一題，送來的是「畫面上這一題」
     { id: "mock", kind: "mock", name: "考前大猜題", sub: "資安初級・科目一＋二 各 50 題仿真卷", subject: "iPAS「資訊安全工程師初級」的考前仿真卷（科目一、科目二）",
       url: LOCAL ? `${location.origin}/_star/mock/?embed=1` : "https://amy610731.github.io/l23-map/mock/?embed=1" },
+    // 科目三考前 14 回（AI 應用規劃師中級科目三，14 回 × 50 題自編仿真題，2026-11-01；來源 E:\小胖\科目三模擬考\）：
+    // 考試模式交卷前送來的題目沒有答案；練習模式／錯題本要等她在畫面上作答，題目才補上答案與解析
+    { id: "l23mock", kind: "mock", name: "科目三考前 14 回", sub: "AI 應用規劃師中級・科目三 14 回模擬考（每回 50 題）", subject: "iPAS「AI 應用規劃師中級」的科目三（機器學習技術與應用）",
+      whyLabel: "出題備註",
+      introExtra: "這份是她 11/14 考試前的 14 回模擬考（每回 50 題，有考試模式、練習模式、錯題本），題目是自編仿真題。練習模式和錯題本要等她在畫面上點了答案，你才會收到這一題的正確答案和解析；在那之前她用說的回答，就請她在畫面上點那個選項，你會收到對錯和解析再講解。交卷後的檢討畫面會列出很多題，她點哪一題你就收到哪一題（附她當時選的答案）。題幹有 Python 程式碼時，用口語說程式在做什麼，不要逐字念程式碼。",
+      url: LOCAL ? `${location.origin}/_star/l23mock/?embed=1` : "https://amy610731.github.io/l23-map/l23mock/?embed=1" },
   ];
   const STAR = { t: 0, answers: {} };
   const starOrigin = m => { try { return new URL(m.url).origin; } catch { return ""; } };
@@ -1119,7 +1125,7 @@
     L.push(`【考點】${t.title}（${[t.sectionName, t.chapter].filter(Boolean).join("｜")}）`);
     if (t.focusQi != null && t.quiz[t.focusQi]) L.push(`【她現在畫面上正在做的是第 ${t.focusQi + 1} 題${t.notebook ? "（錯題本重做：這題她之前答錯過）" : ""}。她說「考我」「這題」就是這一題。】`);
     if (t.kind === "mock") {
-      L.push("這是考前大猜題的自編仿真題，不是官方試題。" + (t.why ? `猜題理由：${t.why}` : ""));
+      L.push(`這是「${(S.star && S.star.name) || "考前大猜題"}」的自編仿真題，不是官方試題。` + (t.why ? `${(S.star && S.star.whyLabel) || "猜題理由"}：${t.why}` : ""));
       if (t.mode === "exam") L.push("【她正在用「考試模式」寫，交卷前畫面不會顯示答案。她作答或問你時，不要說對錯、不要講答案或暗示，只能幫她把題意、名詞講清楚；等她交卷（會收到她的作答結果）才講解。】");
     } else if (S.star && S.star.kind === "guide") L.push(`這一科沒有公開的考古題，練習題全部來自官方學習指引的章末練習題（這個考點有 ${t.quiz.length} 題）；答案以指引公布的為準。`);
     else L.push(t.examHits ? `官方公告試題考過 ${t.examHits} 次（${(t.examRefs || []).join("、")}）` : "官方公告試題還沒考過這個考點");
@@ -1132,7 +1138,8 @@
       t.quiz.forEach((q, i) => {
         L.push(`第 ${i + 1} 題（${q.source}）：${q.stem}`);
         L.push(q.options.map((o, j) => `(${LETTERS[j]}) ${o}`).join("　"));
-        L.push(`正確答案：(${LETTERS[q.answer]})`);
+        // 答案沒送來（科目三考前 14 回：考試模式交卷前、練習模式作答前）就不能寫成 (A)
+        L.push(q.answer == null ? `正確答案：（${t.mode === "exam" ? "考試模式交卷前不提供，你也不知道答案，不要猜" : "她在畫面上作答後才會給你；她用說的回答時，請她在畫面上點那個選項"}）` : `正確答案：(${LETTERS[q.answer]})`);
         if (q.hint) L.push(`答錯時畫面會顯示的提示（只給你引導她用，不要照念、不要當成答案）：${q.hint}`);
         if (q.explanation) L.push(`解析：${q.explanation}`);
       });
@@ -1152,14 +1159,17 @@
       related: arr(raw.related, 5, r => ({ title: clip(r && r.title, 40), why: clip(r && r.why, 120) })),
       quiz: arr(raw.quiz, 8, q => ({
         stem: clip(q && q.stem, 900), options: arr(q && q.options, 6, o => clip(o, 300)),
-        answer: Math.max(0, Math.min(5, +(q && q.answer) || 0)), hint: clip(q && q.hint, 300), explanation: clip(q && q.explanation, 700), source: clip(q && q.source, 40) })),
+        answer: q && q.answer != null && q.answer !== "" ? Math.max(0, Math.min(5, +q.answer || 0)) : null, hint: clip(q && q.hint, 300), explanation: clip(q && q.explanation, 700), source: clip(q && q.source, 40) })),
     };
   }
   // 點了新考點／回到總覽：連線中就偷偷告訴老師（不要它回應）；沒連線的話，下次連線時 getConfig 會帶進去
   function starSetTopic(t) {
     const same = t && S.topic && S.topic.id === t.id;  // 同一個考點只是換題（錯題本重做）：只通知換到第幾題，不重送整份資料
     const modeOnly = same && t.kind === "mock" && t.mode !== S.topic.mode;  // 大猜題同一題只是換了練習／考試模式（或交卷）：要重送，老師才知道能不能講答案
+    // 同一題、同模式，只是她在畫面上作答後補上了答案與解析：不另外通知，緊接著的 answer 訊息會連答案一起告訴老師
+    const gotAns = same && !modeOnly && t.kind === "mock" && t.quiz[0] && S.topic.quiz[0] && S.topic.quiz[0].answer == null && t.quiz[0].answer != null;
     S.topic = t; if (!same) STAR.answers = {};
+    if (gotAns) { clearTimeout(STAR.t); return; }
     if (modeOnly) { clearTimeout(STAR.t); if (PeiduLive.isOn()) STAR.t = setTimeout(() => { if (PeiduLive.isOn() && S.star) PeiduLive.sendText(`（這則不用回應，只是讓你知道：學生切換成${t.mode === "exam" ? "考試模式（交卷前不要講答案）" : "練習模式或已交卷，可以講解"}。目前畫面上的題目如下）\n${starTopicText(t)}`, false); }, 500); return; }
     clearTimeout(STAR.t);
     if (!PeiduLive.isOn()) return;
@@ -1183,7 +1193,9 @@
     if (m.type === "reveal") text = `學生在畫面上按了「看解析」，看了第 ${+m.qi + 1} 題的答案。`;
     else {
       const picked = Math.max(0, Math.min(5, +m.picked || 0)), ok = picked === q.answer;
-      text = `學生在畫面上作答第 ${+m.qi + 1} 題，選了 (${LETTERS[picked]})，${ok ? "答對了" : "答錯了"}${+m.tries > 1 ? `（第 ${+m.tries} 次嘗試）` : ""}。`;
+      text = `學生在畫面上作答第 ${+m.qi + 1} 題，選了 (${LETTERS[picked]})${q.answer == null ? "" : ok ? "，答對了" : "，答錯了"}${+m.tries > 1 ? `（第 ${+m.tries} 次嘗試）` : ""}。`;
+      // 大猜題類：答案是作答後才送來的，順便把答案與解析一起給老師
+      if (t.kind === "mock" && q.answer != null) text += `這題的正確答案是 (${LETTERS[q.answer]})${q.explanation ? `，解析：${q.explanation}` : ""}`;
     }
     STAR.answers[m.qi] = text;
     if (PeiduLive.isOn()) PeiduLive.sendText("（這則不用回應，只是讓你知道：" + text + "）", false);
@@ -1197,7 +1209,7 @@
     else if (m.type === "answer" || m.type === "reveal") starAnswered(m);
   });
   const STAR_INTRO = map => map.kind === "mock"
-    ? `學生正在用「考前大猜題」仿真卷練習${map.subject}。畫面一次顯示一題四選一的題目，她換題時你會收到「畫面上這一題」的資料（下面說的「考點」就是指這一題）。這次沒有講義頁面，也沒有螢光筆；她說的「這題」「這個」就是畫面上這一題。她說「下一題」時，請她在畫面上按「下一題」，你會收到新題目再出題；你只看得到畫面上這一題，不要自己編題目。`
+    ? `學生正在用「${map.name}」仿真卷練習${map.subject}。畫面一次顯示一題四選一的題目，她換題時你會收到「畫面上這一題」的資料（下面說的「考點」就是指這一題）。這次沒有講義頁面，也沒有螢光筆；她說的「這題」「這個」就是畫面上這一題。她說「下一題」時，請她在畫面上按「下一題」，你會收到新題目再出題；你只看得到畫面上這一題，不要自己編題目。${map.introExtra || ""}`
     : `學生正在用星圖複習${map.subject}。畫面上是一張考點星圖，她點開一個考點，畫面就會顯示白話說明、重點、陷阱和練習題。這次沒有講義頁面，也沒有螢光筆；她說的「這題」「這個」指的是她目前點開的考點，或它的練習題。`;
   const STAR_RULES = map => `=== 星圖練習模式（和上面「講義」「這一頁」有衝突的地方，以這一段為準）===
 ${STAR_INTRO(map)}
