@@ -110,7 +110,9 @@
   function status(s) { if (S) { S.lastStatus = s; S.opts.onStatus && S.opts.onStatus(s); } }
   // 字幕裡中文字之間常多空格（「完 整 性」），顯示前先拿掉
   const tidy = t => t.replace(/([　-〿㐀-鿿＀-￯])\s+(?=[　-〿㐀-鿿＀-￯])/g, "$1");
-  function caption() { S.opts.onCaption && S.opts.onCaption({ amy: tidy(S.amyText), claude: tidy(S.claudeText) }); }
+  // 3.8 想「不出聲」時會送來標記字：<!-- (這則不用回應) -->、<no speech>{pause} → 不是話，不顯示、不算老師有講（2026-11-02 Amy 看到對話中間多一行）
+  function junk(t) { return (t || "").replace(/<!--[\s\S]*?(-->|$)/g, "").replace(/<[^<>\n]{0,30}>/g, "").replace(/\{[a-z_ ]{1,20}\}/gi, ""); }
+  function caption() { S.opts.onCaption && S.opts.onCaption({ amy: tidy(S.amyText), claude: tidy(junk(S.claudeText)) }); }
 
   // ---- 播放老師的聲音（24kHz PCM）：接續排程，被打斷就全部停掉 ----
   // 放慢說話速度、音調不變（WSOLA：把聲音切成小段，找波形最接近的地方接起來，接縫才順）
@@ -268,7 +270,7 @@
 
   function flushTurn() {
     if (!S) return;
-    let amy = S.amyText.trim(), claude = S.claudeText.trim();
+    let amy = S.amyText.trim(), claude = junk(S.claudeText).trim();
     const card = S.opts.onWordCard && cardFromText(claude);
     if (card) { claude = card.rest; S.opts.onWordCard({ text: wordCardText(card.args), amy: tidy(amy), args: card.args }); amy = ""; }
     const fm = fakeMarks(claude), hl = S.opts.onHighlight;
@@ -389,8 +391,9 @@
         const q = S.qBuf || (S.qBuf = { audio: [], text: "", drop: false });
         if (sc.outputTranscription && sc.outputTranscription.text) q.text += sc.outputTranscription.text;
         for (const p of (sc.modelTurn && sc.modelTurn.parts) || []) if (p.inlineData && p.inlineData.data && !q.drop) q.audio.push([p.inlineData.data, +((p.inlineData.mimeType || "").match(/rate=(\d+)/) || [0, 24000])[1]]);
-        const ready = normTxt(q.text).length >= 6 || sc.turnComplete || sc.generationComplete;
-        if (!q.drop && ready && (q.text.trim() || q.audio.length)) {
+        const qt = junk(q.text);  // 只有「不出聲」標記 → 等這輪結束直接丟
+        const ready = normTxt(qt).length >= 6 || sc.turnComplete || sc.generationComplete;
+        if (!q.drop && ready && (qt.trim() || q.audio.length)) {
           const dup = overlap(q.text.slice(0, 30), S.prevTurnText) >= 0.6;
           if (S.quietLegit && !dup) {
             diag("講完後又出聲-放行（接著講）", { text: q.text.slice(0, 60), prev: (S.prevTurnText || "").slice(-30) });
@@ -399,7 +402,7 @@
             for (const [dat, rate] of q.audio) { if (!ttsOn()) playChunk(dat, rate); else (S.pendingAudio = S.pendingAudio || []).push([dat, rate]); S.turnAudio++; }
             if (ttsOn() && q.text) ttsFeed(q.text, false);
             if (sc.turnComplete) {
-              const t2 = S.claudeText;
+              const t2 = junk(S.claudeText);
               flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false;
               S.quiet = true; S.quietUntil = performance.now() + 4000; S.prevTurnText = t2;
               S.quietLegit = !/[。！？!?…」』）)~～]\s*$/.test(t2.trim());  // 接著講的這段也停在半路 → 再冒出來的還是放行
@@ -452,7 +455,7 @@
       if (ttsOn() && (sc.generationComplete || sc.turnComplete)) ttsFeed("", true);  // 最後一句沒標點也要念
       if (sc.interrupted) flushTurn();
       if (sc.turnComplete) {
-        const said = (S.turnOut || 0) > 0, turnText = S.claudeText || "";
+        const turnText = junk(S.claudeText), said = (S.turnOut || 0) > 0 && !!turnText.trim();
         flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false;
         // 單字卡教到「請她跟著念」了：之後照常安靜，老師才不會自己又接著講、蓋過她念
         if (S.cardMore && /跟著|跟我|換你|念一遍|唸一遍|念一次|唸一次|試試/.test(turnText)) S.cardMore = 0;
@@ -698,7 +701,7 @@
   function checkMidCut(turnText, said) {
     const tail = turnText.replace(/`[^`]*`/g, "").trim(), fake = S.fakeMarked;
     S.fakeMarked = false;
-    if (!said || S.cardMore || !(fake || (tail.length >= 10 && !/[。！？!?…」』）)~～]$/.test(tail)))) return;
+    if (!said || S.cardMore || !(fake || (tail.length >= 10 && /[，。！？、；：,!?]/.test(tail) && !/[。！？!?…」』）)~～]$/.test(tail)))) return;  // 整段都沒標點＝字幕本來就沒標點，不算停在半路
     if (S.contNudged) { diag("話停在半路-這題已經補過一次，不再補", { tail: tail.slice(-30) }); return; }
     diag("話停在半路-等聲音播完再請老師接著講", { tail: tail.slice(-30), fake: !!fake });
     armContNudge();
