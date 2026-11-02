@@ -11,12 +11,17 @@
     { id: "Leda", label: "Leda（女・年輕）" }, { id: "Zephyr", label: "Zephyr（女・明亮）" },
     { id: "Puck", label: "Puck（男・活潑）" }, { id: "Charon", label: "Charon（男・知性）" },
     { id: "Fenrir", label: "Fenrir（男・有精神）" }, { id: "Orus", label: "Orus（男・穩重）" },
+    { id: "tw-az-hsiaochen", label: "台灣腔・曉臻（Azure 念，讀音最準，開口慢 1 秒，要 Azure 金鑰）" },
+    { id: "tw-az-yunjhe", label: "台灣腔・雲哲 男聲（Azure 念，讀音最準）" },
     { id: "child-az-xiaoyi", label: "童音・小女生 Xiaoyi（Azure，開口慢 1 秒）" },
     { id: "child-az-xiaoyou", label: "童音・小女孩 Xiaoyou（Azure）" },
     { id: "child-az-yunxia", label: "童音・小男生 Yunxia（Azure）" },
   ];
   // 童音：Gemini 沒有童聲、變聲又像變聲器 → 用 Azure 語音的童聲念 Gemini 的字幕（要 opts.tts，金鑰在設定裡）
   const TTS_VOICES = {
+    // 台灣腔：Gemini 自己發音會念錯破音字、冒出別國語言（2026-11-02 Amy 反映）→ Gemini 想答案、Azure 台灣聲音念字幕
+    "tw-az-hsiaochen": { azure: "zh-TW-HsiaoChenNeural", pitch: 0, rate: 0, base: "Kore" },
+    "tw-az-yunjhe": { azure: "zh-TW-YunJheNeural", pitch: 0, rate: 0, base: "Charon" },
     "child-az-xiaoyi": { azure: "zh-CN-XiaoyiNeural", pitch: 15, rate: -12, base: "Kore" },  // Amy 試聽選的那個調法
     "child-az-xiaoyou": { azure: "zh-CN-XiaoyouNeural", pitch: 0, rate: -12, base: "Kore" },  // 官方標「兒童」
     "child-az-yunxia": { azure: "zh-CN-YunxiaNeural", pitch: 0, rate: -12, base: "Kore" },    // 卡通小男生

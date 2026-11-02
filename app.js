@@ -46,6 +46,7 @@
   // server.py 的 LIVE_RULES（手機版沒有 server：lookup 只能查維基百科）
   const LIVE_RULES = `你現在是用「即時語音」回答學生：
 - 用台灣華語的口音和台灣常用詞（例如：影片、軟體、網路、資訊、品質）。
+- 發音照台灣國語的讀音（教育部字典），不要用大陸讀音：星期、期望值的「期」念 qí；危險的「危」念 wéi；企業的「企」念 qì；品質、性質的「質」念 zhí；識別、知識的「識」念 shì；研究的「究」念 jiù；綜合的「綜」念 zòng；暫時的「暫」念 zhàn。破音字要念對：重新、重複念 chóng，權重、重要念 zhòng；機率、效率、召回率念 lǜ；參數念 cān；行列、第幾行念 háng，執行念 xíng；標準差、誤差、偏差念 chā；調整、調參念 tiáo；混淆念 xiáo；似然念 sì。整句都用中文講，絕對不要突然冒出俄文、日文或其他語言的字；英文專有名詞照英文念。
 - 照下面「說話個性」講話，講完就停。不叫她的名字、不寒暄、結尾不硬塞反問。她插話時馬上停下來聽。
 - 說話要慢、要清楚：用比平常聊天慢一點的速度，像老師對第一次學的學生講課，一句講完稍微停一下再講下一句；專有名詞、英文縮寫、數字要放慢念清楚。學生說「講快一點」才加快，說「再慢一點」就更慢。
 - 講新觀念時：先用一個生活化的例子（國中生都懂的日常情境）讓她聽懂，再帶出正式名詞和考試重點；一次不要丟太多名詞。
@@ -159,7 +160,7 @@
   async function azureTts(text, v, conf) {
     conf = conf || azureConf();
     if (!conf) throw new Error("還沒設定 Azure 語音金鑰（⚙️ 設定）");
-    const ssml = `<speak version='1.0' xml:lang='zh-CN'><voice name='${v.azure}'><prosody rate='${v.rate >= 0 ? "+" : ""}${v.rate}%' pitch='${v.pitch >= 0 ? "+" : ""}${v.pitch}Hz'>${xmlEsc(text)}</prosody></voice></speak>`;
+    const ssml = `<speak version='1.0' xml:lang='${v.azure.slice(0, 5)}'><voice name='${v.azure}'><prosody rate='${v.rate >= 0 ? "+" : ""}${v.rate}%' pitch='${v.pitch >= 0 ? "+" : ""}${v.pitch}Hz'>${xmlEsc(text)}</prosody></voice></speak>`;
     const r = await fetch(`https://${conf.region}.tts.speech.microsoft.com/cognitiveservices/v1`, {
       method: "POST", body: ssml,
       headers: { "Ocp-Apim-Subscription-Key": conf.key, "Content-Type": "application/ssml+xml", "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3" },
@@ -1855,7 +1856,7 @@ ${STAR_INTRO(map)}
       speed: +prefs.speed || 0.9,  // 老師語速
       // 童音：字幕一句一句交給 Azure 念；念不出來那句會改用手機內建聲音
       tts: (text, v) => azureTts(text, v),
-      onTtsError: err => { toast("童音念不出來：" + (err.message || err) + "，這次先用老師原本的聲音", 5000); S.sys.push({ text: "童音念不出來：" + (err.message || err), after: S.chat.length }); if (S.tab === "chat") renderSide(); },
+      onTtsError: err => { toast("台灣腔／童音念不出來：" + (err.message || err) + "，這次先用老師原本的聲音", 5000); S.sys.push({ text: "台灣腔／童音念不出來：" + (err.message || err), after: S.chat.length }); if (S.tab === "chat") renderSide(); },
       getConfig: async () => {
         const key = await getKey();
         if (!key) throw new Error("NEED_KEY");
