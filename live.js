@@ -401,7 +401,9 @@
             if (sc.turnComplete) {
               const t2 = S.claudeText;
               flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false;
-              S.quiet = true; S.quietUntil = performance.now() + 4000; S.quietLegit = false; S.prevTurnText = t2;
+              S.quiet = true; S.quietUntil = performance.now() + 4000; S.prevTurnText = t2;
+              S.quietLegit = !/[。！？!?…」』）)~～]\s*$/.test(t2.trim());  // 接著講的這段也停在半路 → 再冒出來的還是放行
+              checkMidCut(t2, true);
             }
             return;
           }
@@ -461,9 +463,7 @@
           S.quietLegit = !!S.turnHadTool || !/[。！？!?…」』）)~～]\s*$/.test(turnText.trim()); S.prevTurnText = turnText; S.turnHadTool = false;
         }
         // 話停在半路（重點寫出來沒真的標、結尾是「：」「，」、或沒有句尾標點）→ 聲音播完、她沒開口、老師也沒接著講，就在背後請它講完
-        const tail = turnText.replace(/`[^`]*`/g, "").trim();
-        if (said && !S.cardMore && (S.fakeMarked || (tail.length >= 10 && !/[。！？!?…」』）)~～]$/.test(tail)))) armContNudge();
-        S.fakeMarked = false;
+        checkMidCut(turnText, said);
       }
     };
     ws.onclose = e => {
@@ -693,6 +693,17 @@
   }
 
   // 話停在半路的補救：她每問一次最多補一次（她開口或問新問題才重置）
+  // 一輪結束時檢查：重點寫出來沒真的標、結尾是「：」「，」、或沒有句尾標點 → 等聲音播完請老師講完
+  // （這一輪是「講完後又冒出來、被放行」的接著講，也要檢查：2026-11-02 停在「最後一題，遇到十個類別的單標」就是這種）
+  function checkMidCut(turnText, said) {
+    const tail = turnText.replace(/`[^`]*`/g, "").trim(), fake = S.fakeMarked;
+    S.fakeMarked = false;
+    if (!said || S.cardMore || !(fake || (tail.length >= 10 && !/[。！？!?…」』）)~～]$/.test(tail)))) return;
+    if (S.contNudged) { diag("話停在半路-這題已經補過一次，不再補", { tail: tail.slice(-30) }); return; }
+    diag("話停在半路-等聲音播完再請老師接著講", { tail: tail.slice(-30), fake: !!fake });
+    armContNudge();
+  }
+
   function armContNudge() {
     if (!S || S.contNudged) return;
     S.contNudged = true;
@@ -700,10 +711,12 @@
     let idle = 0;
     clearTimeout(S.contNudgeT);
     const tick = () => {
-      if (S !== mine || !S.ready) return;
-      if ((S.turnOut || 0) > 0 || S.amyText.trim()) return;  // 老師自己接著講了／她開口了 → 不用補
-      idle = S.sources.size ? 0 : idle + 1;                   // 聲音播完後再多等一下
-      if (idle < 3) { if (performance.now() - t0 < 60000) S.contNudgeT = setTimeout(tick, 500); return; }
+      if (S !== mine) return;
+      if (!S.ready) { if (performance.now() - t0 < 180000) S.contNudgeT = setTimeout(tick, 1000); return; }  // 重連中 → 等連上
+      if ((S.turnOut || 0) > 0) return diag("話停在半路-老師自己接著講了，不用補");
+      if (S.amyText.trim()) return diag("話停在半路-她開口了，不補", { heard: S.amyText.trim().slice(0, 30) });
+      idle = S.sources.size ? 0 : idle + 1;                   // 聲音播完後再多等一下（前面幾輪的聲音可能還排很長）
+      if (idle < 3) { if (performance.now() - t0 < 180000) S.contNudgeT = setTimeout(tick, 500); else diag("話停在半路-等太久聲音還沒播完，放棄"); return; }
       diag("話停在半路，請老師接著講");
       sendText("（你剛剛的話停在一半。請從停下來的地方接著講完，前面講過的不要重講。要畫重點就在背後呼叫 highlight 工具，不要把要標的原文用符號寫出來或念出來。）", true);
     };
