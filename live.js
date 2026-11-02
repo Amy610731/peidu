@@ -331,6 +331,7 @@
       if (d.goAway) { status("reconnecting"); return; }  // 快到時間上限，等它關掉再自動重連
       if (d.toolCall) {  // 老師要查資料／畫重點
         const calls = d.toolCall.functionCalls || [];
+        S.turnHadTool = true;  // 這一輪叫過工具：講完後模型常常還要接著講
         // 答案講到一半叫工具（畫重點）：3.8 的聲音還會繼續傳好幾秒，不能這時就擋（會把話切掉），等這一輪結束才安靜；
         // 3.1 收到工具結果後常在同一輪「再講一次」，所以 3.1 維持一叫工具就擋
         // 單字卡：Gemini 叫完卡片常先結束這一輪、下一輪才接著教 → 這一輪結束時不能安靜（不然後面的教學會被吃掉）
@@ -364,12 +365,39 @@
       if (!sc) return;
       // 她開口（插話／有字幕）＝新的一輪
       if (sc.inputTranscription && sc.inputTranscription.text) { S.resumeCount = 0; S.lastAskAt = performance.now(); }
-      if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; S.toolPending = false; S.cardMore = false; }
+      if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; S.toolPending = false; S.cardMore = false; S.qBuf = null; }
       // 講完之後沒人問、模型卻自己又講（畫完重點再講一次、自己跳下一題）→ 不放、不記。
       // 只擋講完後的幾秒（實測自言自語都在 1.3 秒內冒出來）；她的字幕 3.8 常常很晚才到，擋太久會把她下一題的回答吃掉
       if (S.quiet && performance.now() > (S.quietUntil || 0)) S.quiet = false;
-      if (S.quiet) { if (sc.turnComplete) { S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; } return; }
-      if (sc.interrupted) { stopPlayback(); status("listening"); armFalseInterrupt(); }  // 插話 → 老師馬上閉嘴
+      if (S.quiet) {
+        // 講完後幾秒內模型又出聲：先收著幾個字再判斷（以前是直接丟 → 查完資料後接著講的後半段會被吃掉，話就停在一半）
+        // 重講剛剛的話、或上一輪已經講完整卻又自己講 → 丟掉；上一輪話沒講完／剛叫過工具，而且不是重講 → 放出來
+        const q = S.qBuf || (S.qBuf = { audio: [], text: "", drop: false });
+        if (sc.outputTranscription && sc.outputTranscription.text) q.text += sc.outputTranscription.text;
+        for (const p of (sc.modelTurn && sc.modelTurn.parts) || []) if (p.inlineData && p.inlineData.data && !q.drop) q.audio.push([p.inlineData.data, +((p.inlineData.mimeType || "").match(/rate=(\d+)/) || [0, 24000])[1]]);
+        const ready = normTxt(q.text).length >= 6 || sc.turnComplete || sc.generationComplete;
+        if (!q.drop && ready && (q.text.trim() || q.audio.length)) {
+          const dup = overlap(q.text.slice(0, 30), S.prevTurnText) >= 0.6;
+          if (S.quietLegit && !dup) {
+            diag("講完後又出聲-放行（接著講）", { text: q.text.slice(0, 60), prev: (S.prevTurnText || "").slice(-30) });
+            S.quiet = false; S.qBuf = null;
+            S.claudeText += q.text; S.turnOut = (S.turnOut || 0) + q.text.length; caption();
+            for (const [dat, rate] of q.audio) { if (!ttsOn()) playChunk(dat, rate); else (S.pendingAudio = S.pendingAudio || []).push([dat, rate]); S.turnAudio++; }
+            if (ttsOn() && q.text) ttsFeed(q.text, false);
+            if (sc.turnComplete) {
+              const t2 = S.claudeText;
+              flushTurn(); S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false;
+              S.quiet = true; S.quietUntil = performance.now() + 4000; S.quietLegit = false; S.prevTurnText = t2;
+            }
+            return;
+          }
+          diag(dup ? "講完後又出聲-是重講，擋掉" : "講完後又出聲-上一輪已講完，擋掉", { text: q.text.slice(0, 60), prev: (S.prevTurnText || "").slice(-30) });
+          q.drop = true; q.audio = [];
+        }
+        if (sc.turnComplete) { S.turnAudio = 0; S.turnOut = 0; S.noAudioFired = false; S.qBuf = null; }
+        return;
+      }
+      if (sc.interrupted) { S.cutText = (S.claudeText || "").slice(-300); diag("被打斷", { cut: S.cutText.slice(-40), sinceAsk: Math.round((performance.now() - (S.sentAt || 0)) / 100) / 10 + "s" }); stopPlayback(); status("listening"); armFalseInterrupt(); }  // 插話 → 老師馬上閉嘴
       if (sc.inputTranscription && sc.inputTranscription.text) {
         if (ttsOn() && S.sources.size) stopPlayback();  // 童音還在念、她開口了 → 停下來聽她說
         S.amyText += sc.inputTranscription.text;
@@ -413,11 +441,16 @@
         // 單字卡教到「請她跟著念」了：之後照常安靜，老師才不會自己又接著講、蓋過她念
         if (S.cardMore && /跟著|跟我|換你|念一遍|唸一遍|念一次|唸一次|試試/.test(turnText)) S.cardMore = 0;
         // 3.8 叫完工具會先結束一輪、下一輪才講答案 → 還沒講到答案就不要安靜
-        if (S.toolPending && !said) { /* 等答案 */ } else if (S.cardMore) { S.cardMore--; S.toolPending = false; if (turnText.trim()) armCardNudge(); /* 單字卡後面還有教學（可能分兩輪講），等它講；停在半路就提醒 */ } else { S.toolPending = false; S.quiet = true; S.quietUntil = performance.now() + 4000; }
+        if (S.toolPending && !said) { /* 等答案 */ } else if (S.cardMore) { S.cardMore--; S.toolPending = false; if (turnText.trim()) armCardNudge(); /* 單字卡後面還有教學（可能分兩輪講），等它講；停在半路就提醒 */ } else {
+          S.toolPending = false; S.quiet = true; S.quietUntil = performance.now() + 4000; S.qBuf = null;
+          // 上一輪叫過工具，或話沒講完（結尾不是句號、問號）→ 等一下冒出來的多半是接著講，可以放行
+          S.quietLegit = !!S.turnHadTool || !/[。！？!?…」』）)~～]\s*$/.test(turnText.trim()); S.prevTurnText = turnText; S.turnHadTool = false;
+        }
       }
     };
     ws.onclose = e => {
       if (!S || ws !== S.ws) return;
+      if (!S.stopping) diag("連線中斷", { code: e.code, reason: e.reason || "" });
       flushTurn();
       if (S.stopping) return;
       const reason = String(e.reason || "");
@@ -448,21 +481,57 @@
   }
 
   // 老師被「打斷」了，但 1.5 秒內她沒有講話（沒有字幕、麥克風不大聲）＝喇叭回音或雜音誤判 → 請老師接著講完
+  // ---------- 診斷紀錄（老師話說一半就停時查原因用）：存在這台裝置，電腦版另外送回 server ----------
+  const DIAG_KEY = "peidu-live-diag";
+  function diag(type, info = {}) {
+    const row = { t: new Date().toLocaleString("zh-TW", { hour12: false }), type, model: S && S.model, ...info };
+    try { const a = JSON.parse(localStorage.getItem(DIAG_KEY) || "[]"); a.push(row); localStorage.setItem(DIAG_KEY, JSON.stringify(a.slice(-120))); } catch (e) { /* 存不了就算了 */ }
+    try { S && S.opts.onDiag && S.opts.onDiag(row); } catch (e) { /* 忽略 */ }
+  }
+  function diagText() {
+    let a = [];
+    try { a = JSON.parse(localStorage.getItem(DIAG_KEY) || "[]"); } catch (e) { /* 忽略 */ }
+    return a.map(r => `${r.t}｜${r.type}｜${(r.model || "").replace("models/", "")}｜` + Object.entries(r).filter(([k]) => !["t", "type", "model"].includes(k)).map(([k, v]) => `${k}=${String(v).replace(/\s+/g, " ").slice(0, 120)}`).join("｜")).join("\n") || "（還沒有紀錄）";
+  }
+  const normTxt = s => (s || "").replace(/[\s，。、！？!?,.…「」『』（）()~～\-—:：；;"'“”‘’]/g, "");
+  // a 的兩字詞有多少比例出現在 b 裡（判斷回音、重講用）
+  function overlap(a, b) {
+    a = normTxt(a); b = normTxt(b);
+    if (a.length < 2 || !b) return 0;
+    let hit = 0;
+    for (let i = 0; i < a.length - 1; i++) if (b.includes(a.slice(i, i + 2))) hit++;
+    return hit / (a.length - 1);
+  }
+  // 打斷老師的「話」其實是：老師自己的聲音被麥克風收回去（回音），或只是嗯、喔這種聲音 → 不算她插話
+  function echoOrFiller(heard, cut) {
+    const a = normTxt(heard);
+    if (!a) return true;
+    if (/停|等|暫停|不用|夠了|好了|不要|可以了|閉嘴/.test(a)) return false;  // 她要老師停 → 一定算數
+    if (/^(嗯|恩|啊|阿|喔|哦|噢|欸|誒|呃|蛤|唔|ㄜ|ㄟ|嘿)+$/.test(a)) return true;
+    return a.length >= 3 && overlap(a, cut) >= 0.6;
+  }
+
   function armFalseInterrupt() {
     if (!S) return;
     if (performance.now() - (S.sentAt || 0) < 2500) return;  // 剛送出問題／補講要求造成的中斷，不算誤判（不然會一直補）
     const mine = S, amyLen = S.amyText.length;
     S.loudSeen = false;
     clearTimeout(S.resumeT);
-    S.resumeT = setTimeout(() => {
+    const cut = S.cutText || "";
+    const check = (second) => {
       if (S !== mine || !S.ready) return;
-      if (S.amyText.length > amyLen || S.loudSeen) return;  // 她真的開口了
-      if ((S.resumeCount || 0) >= 2) return;                 // 一直被打斷就不硬補，免得沒完沒了
+      const heard = S.amyText.slice(amyLen).trim();
+      if (!heard && S.loudSeen && !second) { S.resumeT = setTimeout(() => check(true), 1500); return; }  // 很大聲但還沒字幕：再等一下
+      if (heard && !echoOrFiller(heard, cut)) { diag("被打斷-她真的說話", { heard, cut: cut.slice(-40) }); return; }  // 她真的開口了
+      if (heard) S.amyText = S.amyText.slice(0, amyLen);  // 回音／嗯喔：不要記成她說的話
+      if ((S.resumeCount || 0) >= 2) { diag("被打斷-補講次數用完", { heard, cut: cut.slice(-40) }); return; }  // 一直被打斷就不硬補，免得沒完沒了
+      diag("被打斷-判定雜音或回音，請老師接著講", { heard, loud: !!S.loudSeen, cut: cut.slice(-40) });
       S.resumeCount = (S.resumeCount || 0) + 1;
       const keep = S.resumeCount;
       sendText("（剛剛被雜音打斷了，學生其實沒有說話。請從你剛剛中斷的地方接著把話講完，不要從頭重講，也不要提到被打斷。）", true);
       S.resumeCount = keep;  // sendText 不該把次數歸零
-    }, 1500);
+    };
+    S.resumeT = setTimeout(() => check(false), 1500);
   }
 
   function fail(err) {
@@ -637,7 +706,7 @@
     return `<span class="wcard"><span class="wc-word">${esc(word)}</span>${mean ? `<span class="wc-mean">${esc(mean)}</span>` : ""}` +
       row("wc-root", "字根", esc(roots)) + row("wc-kk", "KK", esc(kk)) + row("wc-syl", "音節", sylHTML) + `</span>`;
   }
-  g.PeiduLive = { wordCardHTML, ttsVoice,
+  g.PeiduLive = { wordCardHTML, diagText, ttsVoice,
     VOICES, start, stop, restart, sendText, setMuted,
     isOn: () => !!S, isMuted: () => !!(S && S.muted), status: () => (S ? S.lastStatus : "off"),
     stats: () => (S ? { model: S.model, ready: S.ready, micKind: S.mic && S.mic.kind, micRate: S.micRate,

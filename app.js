@@ -1233,6 +1233,11 @@ ${STAR_INTRO(map)}
     return [rules, TUTOR, STAR_RULES(S.star), personaText(), ctx].join("\n\n");
   }
   renderStarList();
+  $("#diagCopy").onclick = async () => {
+    const t = PeiduLive.diagText();
+    try { await navigator.clipboard.writeText(t); toast("紀錄已複製，貼到 Claude 對話裡就好"); }
+    catch { prompt("長按全選、拷貝這段紀錄：", t); }
+  };
   renderWebRecent();
 
   // ================= 頁面渲染 =================
