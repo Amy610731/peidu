@@ -258,11 +258,25 @@
     try { const a = JSON.parse(m[1]); return a.word ? { args: a, rest: text.replace(m[0], "").trim() } : null; } catch (e) { return null; }
   }
 
+  // 3.8 有時沒真的叫 highlight，而是把要標的原文用 `…` 寫出來（也可能念出來），然後這一輪就結束 → 話停在「再來講義畫重點：」
+  // 頁面自己把那幾句標起來、從對話裡拿掉；這一輪結束時再請老師接著講完（見 armContNudge）
+  function fakeMarks(text) {
+    const marks = [];
+    const rest = text.replace(/`([^`\n]{4,120})`/g, (m, t) => { marks.push(t.trim()); return ""; }).replace(/\n\s*\n+/g, "\n").trim();
+    return { marks, rest };
+  }
+
   function flushTurn() {
     if (!S) return;
     let amy = S.amyText.trim(), claude = S.claudeText.trim();
     const card = S.opts.onWordCard && cardFromText(claude);
     if (card) { claude = card.rest; S.opts.onWordCard({ text: wordCardText(card.args), amy: tidy(amy), args: card.args }); amy = ""; }
+    const fm = fakeMarks(claude), hl = S.opts.onHighlight;
+    if (fm.marks.length) {
+      claude = fm.rest; S.fakeMarked = true;
+      diag("老師把重點寫出來沒真的標", { n: fm.marks.length, first: fm.marks[0].slice(0, 40) });
+      if (hl) for (const t of fm.marks.slice(0, 3)) Promise.resolve().then(() => hl({ text: t, kind: "key", note: "" })).catch(() => {});
+    }
     if (amy) S.lastAmy = amy;  // 換模型重問時要用
     S.amyText = ""; S.claudeText = "";
     if ((amy || claude) && S.opts.onTurn) S.opts.onTurn({ amy: tidy(amy), claude: tidy(claude) });
@@ -364,7 +378,7 @@
       const sc = d.serverContent;
       if (!sc) return;
       // 她開口（插話／有字幕）＝新的一輪
-      if (sc.inputTranscription && sc.inputTranscription.text) { S.resumeCount = 0; S.lastAskAt = performance.now(); }
+      if (sc.inputTranscription && sc.inputTranscription.text) { S.resumeCount = 0; S.contNudged = false; S.lastAskAt = performance.now(); }
       if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; S.toolPending = false; S.cardMore = false; S.qBuf = null; }
       // 講完之後沒人問、模型卻自己又講（畫完重點再講一次、自己跳下一題）→ 不放、不記。
       // 只擋講完後的幾秒（實測自言自語都在 1.3 秒內冒出來）；她的字幕 3.8 常常很晚才到，擋太久會把她下一題的回答吃掉
@@ -446,6 +460,10 @@
           // 上一輪叫過工具，或話沒講完（結尾不是句號、問號）→ 等一下冒出來的多半是接著講，可以放行
           S.quietLegit = !!S.turnHadTool || !/[。！？!?…」』）)~～]\s*$/.test(turnText.trim()); S.prevTurnText = turnText; S.turnHadTool = false;
         }
+        // 話停在半路（重點寫出來沒真的標、結尾是「：」「，」、或沒有句尾標點）→ 聲音播完、她沒開口、老師也沒接著講，就在背後請它講完
+        const tail = turnText.replace(/`[^`]*`/g, "").trim();
+        if (said && !S.cardMore && (S.fakeMarked || (tail.length >= 10 && !/[。！？!?…」』）)~～]$/.test(tail)))) armContNudge();
+        S.fakeMarked = false;
       }
     };
     ws.onclose = e => {
@@ -674,8 +692,27 @@
     S.cardNudgeT = setTimeout(tick, 1500);
   }
 
+  // 話停在半路的補救：她每問一次最多補一次（她開口或問新問題才重置）
+  function armContNudge() {
+    if (!S || S.contNudged) return;
+    S.contNudged = true;
+    const mine = S, t0 = performance.now();
+    let idle = 0;
+    clearTimeout(S.contNudgeT);
+    const tick = () => {
+      if (S !== mine || !S.ready) return;
+      if ((S.turnOut || 0) > 0 || S.amyText.trim()) return;  // 老師自己接著講了／她開口了 → 不用補
+      idle = S.sources.size ? 0 : idle + 1;                   // 聲音播完後再多等一下
+      if (idle < 3) { if (performance.now() - t0 < 60000) S.contNudgeT = setTimeout(tick, 500); return; }
+      diag("話停在半路，請老師接著講");
+      sendText("（你剛剛的話停在一半。請從停下來的地方接著講完，前面講過的不要重講。要畫重點就在背後呼叫 highlight 工具，不要把要標的原文用符號寫出來或念出來。）", true);
+    };
+    S.contNudgeT = setTimeout(tick, 1500);
+  }
+
   function sendText(text, turnComplete = true) {
     if (!S) return false;
+    if (turnComplete && !/^（(請接著|你剛剛的話停在一半)/.test(text)) S.contNudged = false;  // 新問題 → 停在半路可以再補一次
     if (turnComplete) { S.sentAt = performance.now(); S.lastAskAt = S.sentAt; } else S.lastNoticeAt = performance.now();
     if (turnComplete) { stopPlayback(); S.lastText = text; S.amyText = ""; S.lastSendAt = performance.now(); S.firstAudioAt = 0; S.quiet = false; S.toolPending = false; S.cardMore = false; }
     const msg = JSON.stringify({ clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete } });
