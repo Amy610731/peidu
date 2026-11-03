@@ -1856,7 +1856,18 @@ ${STAR_INTRO(map)}
       speed: +prefs.speed || 0.9,  // 老師語速
       // 童音：字幕一句一句交給 Azure 念；念不出來那句會改用手機內建聲音
       tts: (text, v) => azureTts(text, v),
-      onTtsError: err => { toast("台灣腔／童音念不出來：" + (err.message || err) + "，這次先用老師原本的聲音", 5000); S.sys.push({ text: "台灣腔／童音念不出來：" + (err.message || err), after: S.chat.length }); if (S.tab === "chat") renderSide(); },
+      // 沒金鑰卻選了台灣腔／童音：說一次就把聲音改回原本的（不然每次開即時陪讀都跳提示，Amy 2026-11-03 反映）
+      onTtsError: err => {
+        const msg = err.message || String(err);
+        let note;
+        if (/還沒設定/.test(msg)) {
+          const base = (PeiduLive.ttsVoice(prefs.voice) || {}).base || "Kore";
+          prefs.voice = base; savePrefs();
+          note = `還沒設定 Azure 金鑰，老師聲音已改回 ${base}（想用台灣腔：⚙️ 設定裡貼 Azure 金鑰）`;
+        } else if (!S.ttsErrShown) { S.ttsErrShown = true; note = "台灣腔／童音暫時念不出來：" + msg + "，先用老師原本的聲音"; }
+        if (!note) return;
+        toast(note, 5000); S.sys.push({ text: note, after: S.chat.length }); if (S.tab === "chat") renderSide();
+      },
       getConfig: async () => {
         const key = await getKey();
         if (!key) throw new Error("NEED_KEY");
