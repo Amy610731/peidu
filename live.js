@@ -220,11 +220,26 @@
     }
     if (final && S.ttsBuf.trim()) { ttsSay(S.ttsBuf); S.ttsBuf = ""; }
   }
+  // Azure 每段聲音前面約 0.2 秒、後面約 0.85 秒是空白，一段一段接著播就會一頓一頓（2026-11-04 Amy 反映）
+  // → 剪掉前後空白，只留一點點：逗號後留 0.06 秒、句號後留 0.22 秒，聽起來像正常換氣
+  function trimSilence(ctx, buf, tail) {
+    try {
+      const d = buf.getChannelData(0), n = d.length, th = 0.008, sr = buf.sampleRate;
+      let a = 0, b = n - 1;
+      while (a < n && Math.abs(d[a]) < th) a++;
+      while (b > a && Math.abs(d[b]) < th) b--;
+      if (b <= a) return buf;
+      a = Math.max(0, a - Math.round(0.03 * sr)); b = Math.min(n, b + Math.round(tail * sr));
+      const out = ctx.createBuffer(1, b - a, sr);
+      out.copyToChannel(d.subarray(a, b), 0);
+      return out;
+    } catch (e) { return buf; }
+  }
   function ttsSay(raw) {
     const text = tidy(raw).replace(/\s+/g, " ").trim();
     if (!/[\p{L}\p{N}]/u.test(text)) return;
     const gen = S.ttsGen || 0, v = ttsVoice(S.opts.voice), ctx = CTX;
-    const job = S.opts.tts(text, v).then(ab => ctx.decodeAudioData(ab))  // 先平行去轉，播放再照順序
+    const job = S.opts.tts(text, v).then(ab => ctx.decodeAudioData(ab)).then(b => trimSilence(ctx, b, /[，,、：:]\s*$/.test(text) ? 0.06 : 0.22))  // 先平行去轉，播放再照順序
       .catch(err => { ttsGiveUp(err); return null; });
     S.ttsChain = (S.ttsChain || Promise.resolve()).then(() => job).then(buf => {
       if (!S || (S.ttsGen || 0) !== gen) return;  // ttsGen 一開始是空的，要當 0 比（2026-11-04：以前這裡讓台灣腔整輪都不出聲）
