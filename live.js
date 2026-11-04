@@ -227,7 +227,7 @@
     const job = S.opts.tts(text, v).then(ab => ctx.decodeAudioData(ab))  // 先平行去轉，播放再照順序
       .catch(err => { ttsGiveUp(err); return null; });
     S.ttsChain = (S.ttsChain || Promise.resolve()).then(() => job).then(buf => {
-      if (!S || S.ttsGen !== gen) return;
+      if (!S || (S.ttsGen || 0) !== gen) return;  // ttsGen 一開始是空的，要當 0 比（2026-11-04：以前這裡讓台灣腔整輪都不出聲）
       if (!buf) return;
       const src = ctx.createBufferSource();
       src.buffer = buf; src.connect(S.outGain);
