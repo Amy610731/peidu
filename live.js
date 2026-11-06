@@ -239,10 +239,15 @@
       return out;
     } catch (e) { return buf; }
   }
+  // 老師語速也要套到 Azure 念的聲音（2026-11-07 Amy：台灣腔曉臻調語速沒用）：0.9 → rate 再 -10%
+  function ttsSpeedVoice() {
+    const v = ttsVoice(S.opts.voice), sp = +S.opts.speed || 1;
+    return sp < 0.99 ? Object.assign({}, v, { rate: Math.round((v.rate || 0) + (sp - 1) * 100) }) : v;
+  }
   function ttsSay(raw) {
     const text = tidy(raw).replace(/\s+/g, " ").trim();
     if (!/[\p{L}\p{N}]/u.test(text)) return;
-    const gen = S.ttsGen || 0, v = ttsVoice(S.opts.voice), ctx = CTX;
+    const gen = S.ttsGen || 0, v = ttsSpeedVoice(), ctx = CTX;
     const job = S.opts.tts(text, v).then(ab => ctx.decodeAudioData(ab)).then(b => trimSilence(ctx, b, /[，,、：:]\s*$/.test(text) ? 0.06 : 0.22))  // 先平行去轉，播放再照順序
       .catch(err => { ttsGiveUp(err); return null; });
     S.ttsChain = (S.ttsChain || Promise.resolve()).then(() => job).then(buf => {
