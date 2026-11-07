@@ -86,7 +86,9 @@
     function remind(text, info) {  // info：{kind: "study-end"|"rest-end", extra: 第幾種動一動}（手機版用來挑預錄的音檔）
       opts.toast && opts.toast(text);
       if (st.voice && opts.speak) { try { opts.speak(text, info || {}); } catch (e) { /* 念不出來就算了 */ } }
-      if (navigator.vibrate) try { navigator.vibrate([200, 100, 200]); } catch (e) { /* 不支援 */ }
+      // 還沒點過畫面就震動，Chrome 會擋下來並在擴充套件「錯誤」記一筆（2026-11-07 Amy 看到）→ 先確認點過
+      const tapped = !navigator.userActivation || navigator.userActivation.hasBeenActive;
+      if (navigator.vibrate && tapped) try { navigator.vibrate([200, 100, 200]); } catch (e) { /* 不支援 */ }
     }
     function tick() {
       if ((st.phase === "study" || st.phase === "rest") && Date.now() >= st.endAt) {
