@@ -1863,6 +1863,8 @@ ${STAR_INTRO(map)}
       speed: +prefs.speed || 0.9,  // 老師語速
       // 童音：字幕一句一句交給 Azure 念；念不出來那句會改用手機內建聲音
       tts: (text, v) => azureTts(text, v),
+      // 她一開口就先跟 Azure 連好線（no-cors HEAD，不念字、不算額度），老師第一句少等連線（2026-11-07）
+      ttsWarm: () => { const c = azureConf(); return c ? fetch(`https://${c.region}.tts.speech.microsoft.com/cognitiveservices/v1`, { method: "HEAD", mode: "no-cors", cache: "no-store" }) : null; },
       // 沒金鑰卻選了台灣腔／童音：說一次就把聲音改回原本的（不然每次開即時陪讀都跳提示，Amy 2026-11-03 反映）
       onTtsError: err => {
         const msg = err.message || String(err);

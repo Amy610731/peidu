@@ -214,15 +214,25 @@
     for (const [data, rate] of pend) playChunk(data, rate);
     S.opts.onTtsError && S.opts.onTtsError(err);
   }
+  // 她一開口就先跟 Azure 連好線（連線會留著重用），老師第一句不用再等連線；20 秒最多一次，不念字、不算額度
+  function ttsWarm() {
+    if (!ttsOn() || !S.opts.ttsWarm) return;
+    const now = performance.now();
+    if (S.ttsWarmAt && now - S.ttsWarmAt < 20000) return;
+    S.ttsWarmAt = now;
+    try { Promise.resolve(S.opts.ttsWarm(ttsVoice(S.opts.voice))).catch(() => {}); } catch (e) { /* 暖不起來就算了 */ }
+  }
   function ttsFeed(text, final) {
     S.ttsBuf = (S.ttsBuf || "") + text;
     for (;;) {
       // 句號、問號、驚嘆號一定斷；逗號等句子夠長才斷（太碎會一頓一頓）
-      const m = S.ttsBuf.match(/^[\s\S]*?[。！？!?；;\n]/) || (S.ttsBuf.length > 22 && S.ttsBuf.match(/^[\s\S]{8,}?[，,、：:]/));
+      // 每一輪第一段：到第一個逗號（4 個字以上）就先送去念，越早開口越好（2026-11-07 Amy：台灣腔反應比 Gemini 慢很多）
+      const m = S.ttsBuf.match(/^[\s\S]*?[。！？!?；;\n]/) || (!S.ttsSaid && S.ttsBuf.match(/^[\s\S]{4,}?[，,、：:]/)) || (S.ttsBuf.length > 22 && S.ttsBuf.match(/^[\s\S]{8,}?[，,、：:]/));
       if (!m) break;
-      ttsSay(m[0]); S.ttsBuf = S.ttsBuf.slice(m[0].length);
+      ttsSay(m[0]); S.ttsSaid = true; S.ttsBuf = S.ttsBuf.slice(m[0].length);
     }
     if (final && S.ttsBuf.trim()) { ttsSay(S.ttsBuf); S.ttsBuf = ""; }
+    if (final) S.ttsSaid = false;
   }
   // Azure 每段聲音前面約 0.2 秒、後面約 0.85 秒是空白，一段一段接著播就會一頓一頓（2026-11-04 Amy 反映）
   // → 剪掉前後空白，只留一點點：逗號後留 0.06 秒、句號後留 0.22 秒，聽起來像正常換氣
@@ -268,7 +278,7 @@
   }
   function stopPlayback() {
     if (!S) return;
-    S.ttsGen = (S.ttsGen || 0) + 1; S.ttsBuf = ""; S.pendingAudio = [];  // 童音：還沒念的句子全部作廢
+    S.ttsGen = (S.ttsGen || 0) + 1; S.ttsBuf = ""; S.pendingAudio = []; S.ttsSaid = false;  // 童音：還沒念的句子全部作廢
     if (S.stretch) S.stretch.reset();
     for (const s of S.sources) { try { s.stop(); } catch (e) { /* 已經停了 */ } }
     S.sources.clear(); S.playAt = 0;
@@ -409,7 +419,7 @@
       const sc = d.serverContent;
       if (!sc) return;
       // 她開口（插話／有字幕）＝新的一輪
-      if (sc.inputTranscription && sc.inputTranscription.text) { S.resumeCount = 0; S.contNudged = false; S.lastAskAt = performance.now(); }
+      if (sc.inputTranscription && sc.inputTranscription.text) { S.resumeCount = 0; S.contNudged = false; S.lastAskAt = performance.now(); ttsWarm(); }
       if (sc.interrupted || (sc.inputTranscription && sc.inputTranscription.text)) { S.quiet = false; S.pendingAudio = []; S.toolPending = false; S.cardMore = false; S.qBuf = null; }
       // 講完之後沒人問、模型卻自己又講（畫完重點再講一次、自己跳下一題）→ 不放、不記。
       // 只擋講完後的幾秒（實測自言自語都在 1.3 秒內冒出來）；她的字幕 3.8 常常很晚才到，擋太久會把她下一題的回答吃掉
