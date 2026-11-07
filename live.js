@@ -223,14 +223,17 @@
     try { Promise.resolve(S.opts.ttsWarm(ttsVoice(S.opts.voice))).catch(() => {}); } catch (e) { /* 暖不起來就算了 */ }
   }
   function ttsFeed(text, final) {
-    S.ttsBuf = (S.ttsBuf || "") + text;
+    // 字卡程式碼（<WordCard … />）和「### 標題」的井字號不要念出來；字卡還沒寫完就先停在那裡等
+    S.ttsBuf = ((S.ttsBuf || "") + text).replace(/<\s*WordCard\b[\s\S]*?\/\s*>/gi, "").replace(/(^|\n)[ \t]*#{1,6}[ \t]*/g, "$1");
     for (;;) {
+      const hold = S.ttsBuf.search(/<\s*(?:W|$)/i), head = hold >= 0 ? S.ttsBuf.slice(0, hold) : S.ttsBuf;
       // 句號、問號、驚嘆號一定斷；逗號等句子夠長才斷（太碎會一頓一頓）
       // 每一輪第一段：到第一個逗號（4 個字以上）就先送去念，越早開口越好（2026-11-07 Amy：台灣腔反應比 Gemini 慢很多）
-      const m = S.ttsBuf.match(/^[\s\S]*?[。！？!?；;\n]/) || (!S.ttsSaid && S.ttsBuf.match(/^[\s\S]{4,}?[，,、：:]/)) || (S.ttsBuf.length > 22 && S.ttsBuf.match(/^[\s\S]{8,}?[，,、：:]/));
+      const m = head.match(/^[\s\S]*?[。！？!?；;\n]/) || (!S.ttsSaid && head.match(/^[\s\S]{4,}?[，,、：:]/)) || (head.length > 22 && head.match(/^[\s\S]{8,}?[，,、：:]/));
       if (!m) break;
       ttsSay(m[0]); S.ttsSaid = true; S.ttsBuf = S.ttsBuf.slice(m[0].length);
     }
+    if (final) S.ttsBuf = S.ttsBuf.replace(/<\s*(?:WordCard\b[\s\S]*)?$/i, "");  // 到最後都沒收尾的字卡也不念
     if (final && S.ttsBuf.trim()) { ttsSay(S.ttsBuf); S.ttsBuf = ""; }
     if (final) S.ttsSaid = false;
   }
@@ -295,8 +298,13 @@
 
   function cardFromText(text) {
     const m = text.match(/(?:```(?:json)?\s*)?(\{[^{}]*"word"[^{}]*\})\s*(?:```)?/);
-    if (!m) return null;
-    try { const a = JSON.parse(m[1]); return a.word ? { args: a, rest: text.replace(m[0], "").trim() } : null; } catch (e) { return null; }
+    if (m) try { const a = JSON.parse(m[1]); if (a.word) return { args: a, rest: text.replace(m[0], "").trim() }; } catch (e) {}
+    // 老師有時把字卡寫成 <WordCard word="…" meaning="…" … />（2026-11-07 Amy：字卡變成一堆程式碼）→ 一樣認成字卡，連前面的「### 標題」一起拿掉
+    const x = text.match(/(?:#{1,6}[^\n]*\n\s*)?<\s*WordCard\b([\s\S]*?)(?:\/\s*>|$)/i);
+    if (!x) return null;
+    const a = {};
+    x[1].replace(/(\w+)\s*=\s*(?:"([^"]*)"|“([^”]*)”|'([^']*)')/g, (s, k, v1, v2, v3) => { a[k.toLowerCase()] = (v1 ?? v2 ?? v3 ?? "").replace(/\s+/g, " ").trim(); return ""; });
+    return a.word ? { args: a, rest: text.replace(x[0], "").replace(/\n\s*\n+/g, "\n").trim() } : null;
   }
 
   // 3.8 有時沒真的叫 highlight，而是把要標的原文用 `…` 寫出來（也可能念出來），然後這一輪就結束 → 話停在「再來講義畫重點：」
@@ -345,7 +353,7 @@
       // 教英文單字：把單字卡（字根、KK 音標、音節）顯示在學生畫面上（音標用說的講不清楚）
         ...(o.onWordCard ? [{
           name: "word_card",
-          description: "學生要你教英文單字時，把單字卡顯示在學生的畫面上。開口講第一句後呼叫一次，接著再用說的一步一步教。",
+          description: "學生要你教英文單字時，把單字卡顯示在學生的畫面上。開口講第一句後呼叫一次，接著再用說的一步一步教。一定要呼叫這個工具，不要把字卡寫成 <WordCard …> 或 JSON 講出來。",
           parameters: { type: "OBJECT", properties: {
             word: { type: "STRING", description: "英文單字" },
             meaning: { type: "STRING", description: "中文意思，繁體中文，簡短" },
