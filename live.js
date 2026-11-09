@@ -117,8 +117,26 @@
   });
 
   function status(s) { if (S) { S.lastStatus = s; S.opts.onStatus && S.opts.onStatus(s); } }
+  // 3.8 有時整段字幕完全沒標點，只用空格隔開一段一段，或連空格都沒有（2026-11-09 Amy：老師說話都不斷句，聽起來很累人）
+  // → 台灣腔整段一口氣念完、還要等整輪講完才開口。沒標點時自己補逗號：
+  //   ① 2 個字以上後面的空格＝老師換氣的地方；② 「所以、而不是、因為…」這類轉折詞前面（離上一個斷點至少 6 個字）
+  // 有標點的字幕不動（那種空格常切在詞中間：「小 的卷 積核」）
+  const PUNCT = /[，。！？、；：,.!?;:]/;
+  const BREAK_WORDS = /而不是|而是|所以|但是|可是|不過|因為|如果|也就是|然後|而且|或是|或者|例如|比如|像是|因此|只要|雖然|其實|另外|接著|不需要|不用|就像|現在/g;
+  function addBreaks(t) {
+    t = t.replace(/([㐀-鿿]{2,})[ \t]+(?=[㐀-鿿])/g, "$1，");
+    return t.replace(/[^，。！？、；：,.!?;:\n]+/g, seg => {
+      let out = "", last = 0;
+      seg.replace(BREAK_WORDS, (w, i) => {
+        const prev = seg[i - 1] || "";
+        if (i - last >= 6 && /[㐀-鿿]/.test(prev) && !"好之緊出表體呈實發展".includes(prev)) { out += seg.slice(last, i) + "，"; last = i; }
+        return w;
+      });
+      return out + seg.slice(last);
+    });
+  }
   // 字幕裡中文字之間常多空格（「完 整 性」），顯示前先拿掉
-  const tidy = t => t.replace(/([　-〿㐀-鿿＀-￯])\s+(?=[　-〿㐀-鿿＀-￯])/g, "$1");
+  const tidy = t => (PUNCT.test(t) ? t : addBreaks(t)).replace(/([　-〿㐀-鿿＀-￯])\s+(?=[　-〿㐀-鿿＀-￯])/g, "$1");
   // 3.8 想「不出聲」時會送來標記字：<!-- (這則不用回應) -->、<no speech>{pause} → 不是話，不顯示、不算老師有講（2026-11-02 Amy 看到對話中間多一行）
   function junk(t) { return (t || "").replace(/<!--[\s\S]*?(-->|$)/g, "").replace(/<[^<>\n]{0,30}>/g, "").replace(/\{[a-z_ ]{1,20}\}/gi, ""); }
   function caption() { S.opts.onCaption && S.opts.onCaption({ amy: tidy(S.amyText), claude: tidy(junk(S.claudeText)) }); }
@@ -225,17 +243,20 @@
   function ttsFeed(text, final) {
     // 字卡程式碼（<WordCard … />）和「### 標題」的井字號不要念出來；字卡還沒寫完就先停在那裡等
     S.ttsBuf = ((S.ttsBuf || "") + text).replace(/<\s*WordCard\b[\s\S]*?\/\s*>/gi, "").replace(/(^|\n)[ \t]*#{1,6}[ \t]*/g, "$1");
+    // 這一輪到目前都沒標點 → 自己補逗號、每個逗號都斷開念（不然整輪要等講完才一口氣念）
+    if (PUNCT.test(text)) S.ttsPunct = true;
+    if (!S.ttsPunct) S.ttsBuf = addBreaks(S.ttsBuf);
     for (;;) {
       const hold = S.ttsBuf.search(/<\s*(?:W|$)/i), head = hold >= 0 ? S.ttsBuf.slice(0, hold) : S.ttsBuf;
       // 句號、問號、驚嘆號一定斷；逗號等句子夠長才斷（太碎會一頓一頓）
       // 每一輪第一段：到第一個逗號（4 個字以上）就先送去念，越早開口越好（2026-11-07 Amy：台灣腔反應比 Gemini 慢很多）
-      const m = head.match(/^[\s\S]*?[。！？!?；;\n]/) || (!S.ttsSaid && head.match(/^[\s\S]{4,}?[，,、：:]/)) || (head.length > 22 && head.match(/^[\s\S]{8,}?[，,、：:]/));
+      const m = head.match(/^[\s\S]*?[。！？!?；;\n]/) || (!S.ttsSaid && head.match(/^[\s\S]{4,}?[，,、：:]/)) || (head.length > 22 && head.match(/^[\s\S]{8,}?[，,、：:]/)) || (!S.ttsPunct && head.match(/^[\s\S]{2,}?，/));
       if (!m) break;
       ttsSay(m[0]); S.ttsSaid = true; S.ttsBuf = S.ttsBuf.slice(m[0].length);
     }
     if (final) S.ttsBuf = S.ttsBuf.replace(/<\s*(?:WordCard\b[\s\S]*)?$/i, "");  // 到最後都沒收尾的字卡也不念
     if (final && S.ttsBuf.trim()) { ttsSay(S.ttsBuf); S.ttsBuf = ""; }
-    if (final) S.ttsSaid = false;
+    if (final) { S.ttsSaid = false; S.ttsPunct = false; }
   }
   // Azure 每段聲音前面約 0.2 秒、後面約 0.85 秒是空白，一段一段接著播就會一頓一頓（2026-11-04 Amy 反映）
   // → 剪掉前後空白，只留一點點：逗號後留 0.06 秒、句號後留 0.22 秒，聽起來像正常換氣
@@ -281,7 +302,7 @@
   }
   function stopPlayback() {
     if (!S) return;
-    S.ttsGen = (S.ttsGen || 0) + 1; S.ttsBuf = ""; S.pendingAudio = []; S.ttsSaid = false;  // 童音：還沒念的句子全部作廢
+    S.ttsGen = (S.ttsGen || 0) + 1; S.ttsBuf = ""; S.pendingAudio = []; S.ttsSaid = false; S.ttsPunct = false;  // 童音：還沒念的句子全部作廢
     if (S.stretch) S.stretch.reset();
     for (const s of S.sources) { try { s.stop(); } catch (e) { /* 已經停了 */ } }
     S.sources.clear(); S.playAt = 0;
@@ -318,6 +339,7 @@
   function flushTurn() {
     if (!S) return;
     let amy = S.amyText.trim(), claude = junk(S.claudeText).trim();
+    if (claude && !PUNCT.test(claude)) claude = addBreaks(claude);  // 沒標點的字幕：存進對話紀錄前也補逗號（2026-11-09）
     const card = S.opts.onWordCard && cardFromText(claude);
     if (card) { claude = card.rest; S.opts.onWordCard({ text: wordCardText(card.args), amy: tidy(amy), args: card.args }); amy = ""; }
     const fm = fakeMarks(claude), hl = S.opts.onHighlight;
