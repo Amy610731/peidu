@@ -25,8 +25,12 @@
 .pomo-row span { width: 34px; opacity: .75; }
 .pomo-row button, .pomo-acts button { min-height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line, var(--rule, #ccc)); background: transparent; color: inherit; cursor: pointer; font: inherit; }
 .pomo-row button.on { background: #ff6b6b; border-color: #ff6b6b; color: #fff; font-weight: 700; }
+.pomo-row label { display: inline-flex; align-items: center; gap: 4px; opacity: .9; }
+.pomo-row input { width: 52px; min-height: 34px; padding: 0 6px; border-radius: 10px; border: 1px solid var(--line, var(--rule, #ccc)); background: transparent; color: inherit; font: inherit; text-align: center; }
+.pomo-row input.on { border-color: #ff6b6b; box-shadow: 0 0 0 2px #ff6b6b inset; font-weight: 700; }
 .pomo-voice { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; opacity: .9; }
 .pomo-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.pomo-acts button { white-space: nowrap; }
 .pomo-acts .pomo-main { flex: 1; background: #ff6b6b; border-color: #ff6b6b; color: #fff; font-weight: 700; }
 .pomo-acts button:disabled { opacity: .4; cursor: default; }
 .pomo-on { background: #fff0f0 !important; color: #c92a2a !important; border-color: #ff8787 !important; font-variant-numeric: tabular-nums; font-weight: 700; }
@@ -50,11 +54,12 @@
       <div class="pomo-head"><b>🍅 番茄鐘</b><button type="button" data-act="close" aria-label="關閉">✕</button></div>
       <div class="pomo-big" data-el="big">25:00</div>
       <div class="pomo-state" data-el="state">準備好就按開始</div>
-      <div class="pomo-row"><span>讀書</span>${STUDY.map(m => `<button type="button" data-study="${m}">${m} 分</button>`).join("")}</div>
-      <div class="pomo-row"><span>休息</span>${REST.map(m => `<button type="button" data-rest="${m}">${m} 分</button>`).join("")}</div>
+      <div class="pomo-row"><span>讀書</span>${STUDY.map(m => `<button type="button" data-study="${m}">${m} 分</button>`).join("")}<label>自訂<input type="number" min="1" max="240" inputmode="numeric" data-custom="study" title="自己輸入讀書幾分鐘">分</label></div>
+      <div class="pomo-row"><span>休息</span>${REST.map(m => `<button type="button" data-rest="${m}">${m} 分</button>`).join("")}<label>自訂<input type="number" min="1" max="120" inputmode="numeric" data-custom="rest" title="自己輸入休息幾分鐘">分</label></div>
       <label class="pomo-voice"><input type="checkbox" data-el="voice"> 時間到用語音提醒（起來動一動、喝水、上廁所）</label>
       <div class="pomo-acts">
         <button type="button" data-act="start" class="pomo-main">▶ 開始讀書</button>
+        <button type="button" data-act="add5" title="這一段倒數再多加 5 分鐘">＋5 分</button>
         <button type="button" data-act="pause">⏸ 暫停</button>
         <button type="button" data-act="stop">⏹ 結束</button>
       </div>`;
@@ -72,6 +77,13 @@
         "study-paused": "讀書暫停中", "rest-paused": "休息暫停中" }[st.phase];
       pop.querySelectorAll("[data-study]").forEach(b => b.classList.toggle("on", +b.dataset.study === st.study));
       pop.querySelectorAll("[data-rest]").forEach(b => b.classList.toggle("on", +b.dataset.rest === st.rest));
+      // 自訂欄：不是預設的分鐘數就顯示在欄位裡並亮起來（正在打字時不去動它）
+      [["study", STUDY], ["rest", REST]].forEach(([k, presets]) => {
+        const inp = $(`[data-custom="${k}"]`), custom = !presets.includes(st[k]);
+        inp.classList.toggle("on", custom);
+        if (document.activeElement !== inp) inp.value = custom ? st[k] : "";
+      });
+      $('[data-act="add5"]').disabled = st.phase === "idle";
       $('[data-act="start"]').textContent = st.phase === "idle" ? "▶ 開始讀書" : st.phase.endsWith("paused") ? "▶ 繼續" : st.phase === "rest" ? "⏭ 提早回來讀" : "▶ 重新開始";
       $('[data-act="pause"]').disabled = !running;
       $('[data-act="stop"]').disabled = st.phase === "idle";
@@ -124,10 +136,20 @@
         begin("study"); opts.toast && opts.toast(`🍅 開始！專心讀 ${st.study} 分鐘，時間到我會提醒你休息`);
         return;
       }
+      if (act === "add5" && st.phase !== "idle") {
+        if (st.phase.endsWith("paused")) st.left += 5 * 60000; else st.endAt += 5 * 60000;
+        save(); opts.toast && opts.toast("⏱ 多加 5 分鐘"); return paint();
+      }
       if (act === "pause" && (st.phase === "study" || st.phase === "rest")) { st.left = st.endAt - Date.now(); st.phase += "-paused"; save(); return paint(); }
       if (act === "stop") { st.phase = "idle"; st.left = 0; st.rounds = 0; save(); return paint(); }
     });
     $('[data-el="voice"]').addEventListener("change", e => { st.voice = e.target.checked; save(); });
+    // 自訂分鐘數：打完數字（離開欄位或按 Enter）就套用；下一段倒數開始時生效
+    pop.querySelectorAll("[data-custom]").forEach(inp => inp.addEventListener("change", () => {
+      const k = inp.dataset.custom, max = k === "rest" ? 120 : 240, v = Math.round(+inp.value);
+      if (!(v >= 1)) { inp.value = ""; return paint(); }
+      st[k] = Math.min(max, v); save(); inp.blur(); paint();
+    }));
     document.addEventListener("keydown", e => { if (e.key === "Escape") pop.hidden = true; });
     tick();
     return { state: () => ({ ...st, remaining: remaining() }), _tick: tick, _force: ms => { st.endAt = Date.now() + ms; save(); } };
