@@ -82,6 +82,7 @@
 
   let S = null;    // 一次「即時陪讀」的所有狀態
   let CTX = null;  // 共用的 AudioContext（iPhone 只能在點擊當下建立，所以留著重用）
+  let CTX_STALE = false;  // 到過背景／被來電中斷過 → 下次開始時換新的（見 ensureCtx）
 
   function b64FromI16(i16) {
     let bin = ""; const u8 = new Uint8Array(i16.buffer, i16.byteOffset, i16.byteLength);
@@ -100,10 +101,21 @@
   function ensureCtx() {
     const AC = g.AudioContext || g.webkitAudioContext;
     if (!AC) throw new Error("這個瀏覽器不支援即時語音");
+    // iPad 切到別的 App／來電回來後，舊的 AudioContext 常變成「殭屍」：狀態看起來正常，但麥克風收不到聲音、resume() 也可能永遠不回
+    // （2026-11-11 Amy：切回來就不能用語音，要整個退出再進來）→ 被中斷過或到過背景，就丟掉舊的、在這次點擊裡重建一個
+    if (CTX && (CTX_STALE || CTX.state === "interrupted") && !S) {
+      try { CTX.onstatechange = null; CTX.close().catch(() => {}); } catch (e) { /* 忽略 */ }
+      CTX = null;
+    }
     if (!CTX || CTX.state === "closed") {
       try { CTX = new AC({ latencyHint: "interactive" }); } catch (e) { CTX = new AC(); }
-      // iPhone 來電、Siri 會把音訊「中斷」：結束後自動叫醒
-      CTX.onstatechange = () => { if (S && CTX && CTX.state !== "running" && CTX.state !== "closed") CTX.resume().catch(() => {}); };
+      CTX_STALE = false;
+      // iPhone 來電、Siri 會把音訊「中斷」：結束後自動叫醒；被中斷過的這個 context 下次開始就換新的
+      const me = CTX;
+      CTX.onstatechange = () => {
+        if (me.state === "interrupted") CTX_STALE = true;
+        if (S && CTX === me && me.state !== "running" && me.state !== "closed") me.resume().catch(() => {});
+      };
     }
     if (CTX.state !== "running") CTX.resume().catch(() => {});
     try {  // iOS 解鎖：在點擊當下放一段 1 個樣本的無聲音訊
@@ -113,7 +125,19 @@
     return CTX;
   }
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && S && CTX && CTX.state !== "running") CTX.resume().catch(() => {});
+    if (document.hidden) { CTX_STALE = true; return; }  // 到過背景：下次按開始就換新的 AudioContext
+    if (!S || !CTX) return;
+    if (CTX.state !== "running") CTX.resume().catch(() => {});
+    // 切回來時即時陪讀還開著：2.5 秒內麥克風都沒送聲音進來＝已經被系統弄壞了 → 直接停掉，請她再按一次（再按就會整個重建）
+    const mine = S, t0 = performance.now();
+    setTimeout(() => {
+      if (S !== mine || S.stopping || !S.mic) return;
+      const tr = S.mic.stream.getAudioTracks()[0];
+      const why = !tr || tr.readyState === "ended" ? "麥克風已關" : tr.muted ? "麥克風被靜音" : CTX.state !== "running" ? "音訊是 " + CTX.state : !(S.micAt > t0) ? "麥克風沒有聲音進來" : "";
+      if (!why) return;
+      diag("切回來-麥克風壞了，停掉請她再按", { why });
+      fail(new Error("麥克風被系統中斷了（例如切到別的 App 或來電），再按一次「開始陪讀」就好"));
+    }, 2500);
   });
 
   function status(s) { if (S) { S.lastStatus = s; S.opts.onStatus && S.opts.onStatus(s); } }
@@ -655,7 +679,8 @@
   async function startMic(ctx) {
     try { if (navigator.audioSession) navigator.audioSession.type = "play-and-record"; } catch (e) { /* 舊版 Safari 沒有 */ }
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-    if (ctx.state !== "running") await ctx.resume().catch(() => {});
+    // iOS 被中斷過的 context，resume() 可能永遠不回 → 最多等 1.5 秒，不要卡在「連線中」
+    if (ctx.state !== "running") await Promise.race([ctx.resume().catch(() => {}), new Promise(r => setTimeout(r, 1500))]);
     const srcNode = ctx.createMediaStreamSource(stream);
     const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);  // 接到喇叭（音量 0），處理器才會一直跑
     const outRate = ctx.sampleRate < 16000 ? ctx.sampleRate : 16000;
@@ -665,20 +690,21 @@
         if (!ctx.__peiduMic) { await ctx.audioWorklet.addModule(S.opts.workletUrl || WORKLET_URL); ctx.__peiduMic = true; }
         node = new AudioWorkletNode(ctx, "peidu-mic-16k", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
           processorOptions: { targetRate: 16000, chunk: 640 } });
-        node.port.onmessage = ev => { if (ev.data instanceof ArrayBuffer) sendPcm(new Int16Array(ev.data)); };
+        node.port.onmessage = ev => { if (ev.data instanceof ArrayBuffer) { if (S) S.micAt = performance.now(); sendPcm(new Int16Array(ev.data)); } };
       } catch (e) { node = null; }
     }
     if (!node) {  // 退路：ScriptProcessor（iOS 14.5 以前）
       kind = "script";
       node = ctx.createScriptProcessor(4096, 1, 1);
       const ds = makeDownsampler(ctx.sampleRate, outRate);
-      node.onaudioprocess = ev => sendPcm(ds(ev.inputBuffer.getChannelData(0)));
+      node.onaudioprocess = ev => { if (S) S.micAt = performance.now(); sendPcm(ds(ev.inputBuffer.getChannelData(0))); };
     }
     srcNode.connect(node); node.connect(sink);
     // iPhone 切到別的 App、來電時，系統可能直接把麥克風關掉：告訴她再按一次
     const track = stream.getAudioTracks()[0];
     const mine = S;
-    if (track) track.addEventListener("ended", () => { if (S && S === mine && !S.stopping) fail(new Error("麥克風被系統中斷了（例如切到別的 App 或來電），再按一次「開始陪讀」")); });
+    if (track) track.addEventListener("mute", () => { CTX_STALE = true; });
+    if (track) track.addEventListener("ended", () => { CTX_STALE = true; if (S && S === mine && !S.stopping) fail(new Error("麥克風被系統中斷了（例如切到別的 App 或來電），再按一次「開始陪讀」")); });
     return { stream, srcNode, node, sink, kind, rate: outRate, ctxRate: ctx.sampleRate };
   }
 
