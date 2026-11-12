@@ -991,18 +991,56 @@
   const starOrigin = m => { try { return new URL(m.url).origin; } catch { return ""; } };
   const clip = (s, n) => String(s == null ? "" : s).slice(0, n);
   const LETTERS = "ABCDEFGH";
+  // 書架清單可收合（星圖、最近網頁各記各的），星圖可隱藏（內建的刪不掉，只是不顯示，隨時可恢復）（2026-11-12）
+  const FOLD_LS = "peidu-phone-shelf-fold", STAR_OFF_LS = "peidu-phone-star-hidden";
+  const STAR_DEAD = new Set();  // 網址 404（還沒上線）的星圖
+  let starShowOff = false;      // 「顯示已隱藏的」展開中
+  function applyFold() {
+    const f = LS.get(FOLD_LS, {});
+    document.querySelectorAll("#shelf .fold-head").forEach(h => {
+      const k = h.dataset.fold, open = !f[k];
+      h.setAttribute("aria-expanded", String(open));
+      const box = k === "star" ? $("#starList") : $("#webRecent");
+      if (k === "web") box.hidden = h.hidden || !open; else box.hidden = !open;
+    });
+  }
+  document.querySelectorAll("#shelf .fold-head").forEach(h => h.addEventListener("click", () => {
+    const f = LS.get(FOLD_LS, {}); f[h.dataset.fold] = !f[h.dataset.fold]; LS.set(FOLD_LS, f); applyFold();
+  }));
   function renderStarList() {
-    $("#starList").innerHTML = STAR_MAPS.map(m => `<button type="button" class="star-btn" data-star="${esc(m.id)}"><b>🌌 ${esc(m.name)}</b><small>${esc(m.sub)}</small></button>`).join("");
-    // 還沒上線的星圖（網址 404）先藏起來；只在正式網站查（同網域，本機測試不查）
-    if (!LOCAL) STAR_MAPS.forEach(m => {
+    const off = new Set(LS.get(STAR_OFF_LS, []));
+    const live = STAR_MAPS.filter(m => !STAR_DEAD.has(m.id));
+    const nOff = live.filter(m => off.has(m.id)).length;
+    if (!nOff) starShowOff = false;
+    $("#starList").innerHTML = live.filter(m => starShowOff || !off.has(m.id)).map(m => {
+      const isOff = off.has(m.id);
+      return `<div class="star-row${isOff ? " is-off" : ""}" data-star="${esc(m.id)}">
+        <button type="button" class="star-btn" data-act="open"><b>🌌 ${esc(m.name)}</b><small>${esc(m.sub)}</small></button>
+        <button type="button" class="star-x" data-act="${isOff ? "show" : "hide"}" aria-label="${isOff ? "恢復" : "隱藏"} ${esc(m.name)}">${isOff ? "恢復" : "隱藏"}</button>
+      </div>`;
+    }).join("") + (nOff ? `<button type="button" class="star-more" data-act="more">${starShowOff ? "收起已隱藏的" : `顯示已隱藏的 ${nOff} 個`}</button>` : "");
+    const head = $('#shelf .fold-head[data-fold="star"]');
+    if (head) head.dataset.count = `（${live.length - nOff}）`;
+  }
+  // 還沒上線的星圖（網址 404）先藏起來；只在正式網站查（同網域，本機測試不查）
+  function checkStarUrls() {
+    if (LOCAL) return;
+    STAR_MAPS.forEach(m => {
       fetch(m.url.replace("?embed=1", ""), { method: "HEAD", cache: "no-store" }).then(r => {
-        if (!r.ok) { const b = $(`#starList [data-star="${m.id}"]`); if (b) b.hidden = true; }
+        if (!r.ok) { STAR_DEAD.add(m.id); renderStarList(); }
       }).catch(() => {});
     });
   }
   $("#starList").addEventListener("click", e => {
-    const b = e.target.closest("[data-star]"); if (!b) return;
-    const m = STAR_MAPS.find(x => x.id === b.dataset.star); if (m) openStar(m);
+    const b = e.target.closest("[data-act]"); if (!b) return;
+    if (b.dataset.act === "more") { starShowOff = !starShowOff; return renderStarList(); }
+    const row = b.closest("[data-star]"); if (!row) return;
+    const m = STAR_MAPS.find(x => x.id === row.dataset.star); if (!m) return;
+    if (b.dataset.act === "open") return openStar(m);
+    const off = LS.get(STAR_OFF_LS, []).filter(id => id !== m.id);
+    if (b.dataset.act === "hide") { off.push(m.id); toast(`已隱藏「${m.name}」，最下面「顯示已隱藏的」可以恢復`); }
+    else toast(`「${m.name}」回到書架了`);
+    LS.set(STAR_OFF_LS, off); renderStarList();
   });
   // ================= 🌐 網頁陪讀（像電腦版擴充套件：左邊網頁、右邊老師；不轉 PDF） =================
   // 用星圖的版面（#starFrame）。老師讀的文字：先用 Jina Reader 抓網頁文字；字太少（心智圖這類互動網頁，字藏在網頁背後的資料裡）
@@ -1010,8 +1048,13 @@
   const WEB_RECENT = "peidu-phone-web-recent";
   function renderWebRecent() {
     const a = LS.get(WEB_RECENT, []);
-    $("#webRecent").hidden = $("#webRecentLabel").hidden = !a.length;
-    $("#webRecent").innerHTML = a.map(x => `<button type="button" class="star-btn" data-url="${esc(x.url)}"><b>🌐 ${esc(x.title || x.url)}</b><small>${esc(x.url.replace(/^https?:\/\//, "").slice(0, 70))}</small></button>`).join("");
+    $("#webRecentLabel").hidden = !a.length;
+    $("#webRecentLabel").dataset.count = `（${a.length}）`;
+    $("#webRecent").innerHTML = a.map(x => `<div class="star-row" data-url="${esc(x.url)}">
+      <button type="button" class="star-btn" data-act="open"><b>🌐 ${esc(x.title || x.url)}</b><small>${esc(x.url.replace(/^https?:\/\//, "").slice(0, 70))}</small></button>
+      <button type="button" class="star-x" data-act="del" aria-label="從清單移除 ${esc(x.title || x.url)}">移除</button>
+    </div>`).join("");
+    applyFold();
   }
   function rememberWeb(url, title) {
     const a = LS.get(WEB_RECENT, []).filter(x => x.url !== url);
@@ -1019,7 +1062,13 @@
     LS.set(WEB_RECENT, a.slice(0, 6));
     renderWebRecent();
   }
-  $("#webRecent").addEventListener("click", e => { const b = e.target.closest("[data-url]"); if (b) openWeb(b.dataset.url); });
+  $("#webRecent").addEventListener("click", e => {
+    const b = e.target.closest("[data-act]"), row = e.target.closest("[data-url]"); if (!b || !row) return;
+    const url = row.dataset.url;
+    if (b.dataset.act === "open") return openWeb(url);
+    LS.set(WEB_RECENT, LS.get(WEB_RECENT, []).filter(x => x.url !== url));  // 只是清掉紀錄，網頁本身沒存在手機裡
+    renderWebRecent(); toast("已從最近清單移除");
+  });
   function openWebInput(input) {
     const raw = ((input || "").match(/https?:\/\/[^\s<>"']+/i) || [(input || "").trim()])[0];
     let url;
@@ -1240,7 +1289,7 @@ ${STAR_INTRO(map)}
     const ctx = S.topic ? `=== 學生目前點開的考點 ===\n${starTopicText(S.topic)}` + (Object.keys(STAR.answers).length ? "\n她在畫面上已經作答：" + Object.values(STAR.answers).join("") : "") : "=== 學生還沒有點開任何考點 ===";
     return [rules, TUTOR, STAR_RULES(S.star), personaText(), ctx].join("\n\n");
   }
-  renderStarList();
+  renderStarList(); checkStarUrls(); applyFold();
   $("#diagCopy").onclick = async () => {
     const t = PeiduLive.diagText();
     try { await navigator.clipboard.writeText(t); toast("紀錄已複製，貼到 Claude 對話裡就好"); }
