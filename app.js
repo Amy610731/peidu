@@ -1925,6 +1925,13 @@ ${STAR_INTRO(map)}
         S.sys.push({ text: "即時陪讀停了：" + m, after: S.chat.length });
         if (S.tab === "chat") renderSide();
         toast("即時陪讀停了：" + m, 5000);
+        // 麥克風壞掉（iPad 切 App 回來）：重新載入頁面＝不用整個退出再進來，會回到同一頁
+        if (err && err.name === "MicDead") setTimeout(() => {
+          if (confirm("即時陪讀的麥克風卡住了（iPad 切 App 或來電後偶爾會這樣）。\n\n要重新載入頁面嗎？會回到同一頁，載入完再按一次「開始陪讀」。")) {
+            try { flushLastPage(); } catch (e) { /* 忽略 */ }
+            location.reload();
+          }
+        }, 300);
       },
       // 老師要查資料（中文維基百科）
       onLookup: async query => {
@@ -2236,7 +2243,18 @@ ${STAR_INTRO(map)}
     },
   });
   // 重新整理後番茄鐘還在倒數、但聲音還沒解鎖：碰一下畫面任何地方就解鎖
-  document.addEventListener("pointerdown", () => { const st = pomo.state(); if (st.phase !== "idle" && (!POMO.ctx || POMO.ctx.state !== "running")) pomoUnlock(); }, { capture: true, passive: true });
+  // （即時陪讀開著、或這一下是按麥克風 → 不解鎖：番茄鐘那時改請老師講，兩個 AudioContext 同時搶 iPad 的音訊會讓麥克風收不到，2026-11-12）
+  document.addEventListener("pointerdown", ev => {
+    const st = pomo.state();
+    if (PeiduLive.isOn() || (ev.target && ev.target.closest && ev.target.closest("#micBtn"))) return;
+    if (st.phase !== "idle" && (!POMO.ctx || POMO.ctx.state !== "running")) pomoUnlock();
+  }, { capture: true, passive: true });
+  // 切到別的 App／來電：番茄鐘的 AudioContext 直接關掉（iOS 被中斷過的會卡住整個頁面的音訊），回來碰一下畫面再重建
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden || !POMO.ctx) return;
+    try { POMO.ctx.close().catch(() => {}); } catch (e) { /* 忽略 */ }
+    POMO.ctx = null; POMO.bufs = {}; POMO.loading = null;
+  });
   makeHSplit($("#chatSplit"), $("#chatBox"), "peidu-phone-chatbox-h2" + (mqWide.matches ? "-wide" : ""), 64, 200);  // 手機、平板各記各的
 
   $("#chatBox").addEventListener("submit", e => {
