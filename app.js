@@ -966,6 +966,12 @@
       url: LOCAL ? `${location.origin}/_star/sec2/?embed=1` : "https://amy610731.github.io/l23-map/sec2/?embed=1" },
     { id: "sec1", name: "資安科目一星圖", sub: "資訊安全工程師初級・科目一", subject: "iPAS「資訊安全工程師初級」的科目一",
       url: LOCAL ? `${location.origin}/_star/sec1/?embed=1` : "https://amy610731.github.io/l23-map/sec1/?embed=1" },
+    // 資安中級星圖（2026-11-25；來源 E:\小胖\資安中級星圖\，看那裡的 PLAN.md）：練習題全是官方公告試題，約 1/4 複選（answer 陣列）、
+    // 約一半是題組（quiz 帶 context＝原卷附圖的案例文字）。cleanTopic／starTopicText／starAnswered 已支援複選與情境
+    { id: "sec21", name: "資安中級科目一星圖", sub: "資訊安全工程師中級・科目一 資訊安全規劃實務", subject: "iPAS「資訊安全工程師中級」的科目一（資訊安全規劃實務）",
+      url: LOCAL ? `${location.origin}/_star/sec21/?embed=1` : "https://amy610731.github.io/l23-map/sec21/?embed=1" },
+    { id: "sec22", name: "資安中級科目二星圖", sub: "資訊安全工程師中級・科目二 資訊安全防護實務", subject: "iPAS「資訊安全工程師中級」的科目二（資訊安全防護實務）",
+      url: LOCAL ? `${location.origin}/_star/sec22/?embed=1` : "https://amy610731.github.io/l23-map/sec22/?embed=1" },
     // 營運智慧分析師初級 考科一（2026-10-28）：沒有公開考古題，題目全部是學習指引章末練習題（kind:"guide"）
     { id: "ops1", kind: "guide", name: "營運科目一星圖", sub: "營運智慧分析師初級・考科一 營運智慧概論", subject: "iPAS「營運智慧分析師初級」的考科一（營運智慧概論）",
       url: LOCAL ? `${location.origin}/_star/ops1/?embed=1` : "https://amy610731.github.io/l23-map/ops1/?embed=1" },
@@ -1181,6 +1187,8 @@
     renderSide();
   }
   // 把一個考點整理成給老師看的文字
+  // 答案字母：單選 (B)；複選 (A)(C)(D)
+  const ansLetters = a => (Array.isArray(a) ? a : [a]).map(x => `(${LETTERS[x]})`).join("");
   function starTopicText(t) {
     const L = [];
     L.push(`【考點】${t.title}（${[t.sectionName, t.chapter].filter(Boolean).join("｜")}）`);
@@ -1198,11 +1206,17 @@
     if (t.related.length) L.push("相關考點：" + t.related.map(r => r.title + (r.why ? `（${r.why}）` : "")).join("；"));
     if (t.quiz.length) {
       L.push(`\n【畫面上的練習題，共 ${t.quiz.length} 題；編號和畫面上一樣。正確答案與解析是給你判斷用的，她回答之前不能講】`);
+      if (t.quiz.some(q => Array.isArray(q.answer))) L.push("【標「（複選）」的題目有 2 個以上正確選項：念題時先說「這是複選題」，但不要說有幾個正確；她口頭回答時要全部選對、沒有多選才算對。】");
+      const ctxSeen = new Map();  // 同一題組共用的情境只貼一次
       t.quiz.forEach((q, i) => {
-        L.push(`第 ${i + 1} 題（${q.source}）：${q.stem}`);
+        if (q.context) {
+          if (ctxSeen.has(q.context)) L.push(`第 ${i + 1} 題的情境：同第 ${ctxSeen.get(q.context)} 題。`);
+          else { ctxSeen.set(q.context, i + 1); L.push(`第 ${i + 1} 題的情境（原卷附圖的案例，念題時先用口語交代情境重點）：${q.context}`); }
+        }
+        L.push(`第 ${i + 1} 題${Array.isArray(q.answer) ? "（複選）" : ""}（${q.source}）：${q.stem}`);
         L.push(q.options.map((o, j) => `(${LETTERS[j]}) ${o}`).join("　"));
         // 答案沒送來（科目三考前 14 回：考試模式交卷前、練習模式作答前）就不能寫成 (A)
-        L.push(q.answer == null ? `正確答案：（${t.mode === "exam" ? "考試模式交卷前不提供，你也不知道答案，不要猜" : "她在畫面上作答後才會給你；她用說的回答時，請她在畫面上點那個選項"}）` : `正確答案：(${LETTERS[q.answer]})`);
+        L.push(q.answer == null ? `正確答案：（${t.mode === "exam" ? "考試模式交卷前不提供，你也不知道答案，不要猜" : "她在畫面上作答後才會給你；她用說的回答時，請她在畫面上點那個選項"}）` : `正確答案：${ansLetters(q.answer)}`);
         if (q.hint) L.push(`答錯時畫面會顯示的提示（只給你引導她用，不要照念、不要當成答案）：${q.hint}`);
         if (q.explanation) L.push(`解析：${q.explanation}`);
       });
@@ -1222,7 +1236,11 @@
       related: arr(raw.related, 5, r => ({ title: clip(r && r.title, 40), why: clip(r && r.why, 120) })),
       quiz: arr(raw.quiz, 8, q => ({
         stem: clip(q && q.stem, 900), options: arr(q && q.options, 6, o => clip(o, 300)),
-        answer: q && q.answer != null && q.answer !== "" ? Math.max(0, Math.min(5, +q.answer || 0)) : null, hint: clip(q && q.hint, 300), explanation: clip(q && q.explanation, 700), source: clip(q && q.source, 40) })),
+        // 答案：整數＝單選；陣列＝複選（資安中級星圖，2026-11-25）
+        answer: q && Array.isArray(q.answer) ? ([...new Set(q.answer.slice(0, 6).map(x => Math.max(0, Math.min(5, +x || 0))))].sort((a, b) => a - b))
+          : q && q.answer != null && q.answer !== "" ? Math.max(0, Math.min(5, +q.answer || 0)) : null,
+        context: clip(q && q.context, 1500),  // 題組情境（原卷附圖轉寫的案例文字）
+        hint: clip(q && q.hint, 300), explanation: clip(q && q.explanation, 700), source: clip(q && q.source, 40) })),
     };
   }
   // 點了新考點／回到總覽：連線中就偷偷告訴老師（不要它回應）；沒連線的話，下次連線時 getConfig 會帶進去
@@ -1255,10 +1273,13 @@
     let text;
     if (m.type === "reveal") text = `學生在畫面上按了「看解析」，看了第 ${+m.qi + 1} 題的答案。`;
     else {
-      const picked = Math.max(0, Math.min(5, +m.picked || 0)), ok = picked === q.answer;
-      text = `學生在畫面上作答第 ${+m.qi + 1} 題，選了 (${LETTERS[picked]})${q.answer == null ? "" : ok ? "，答對了" : "，答錯了"}${+m.tries > 1 ? `（第 ${+m.tries} 次嘗試）` : ""}。`;
+      // 複選題：picked 是陣列，集合完全相同才算對（資安中級星圖，2026-11-25）
+      const toSet = v => [...new Set((Array.isArray(v) ? v.slice(0, 6) : [v]).map(x => Math.max(0, Math.min(5, +x || 0))))].sort((a, b) => a - b);
+      const picked = toSet(m.picked), right = q.answer == null ? null : toSet(q.answer);
+      const ok = right != null && picked.length === right.length && picked.every((x, i) => x === right[i]);
+      text = `學生在畫面上作答第 ${+m.qi + 1} 題，選了 ${ansLetters(Array.isArray(m.picked) ? picked : picked[0])}${q.answer == null ? "" : ok ? "，答對了" : "，答錯了"}${+m.tries > 1 ? `（第 ${+m.tries} 次嘗試）` : ""}。`;
       // 大猜題類：答案是作答後才送來的，順便把答案與解析一起給老師
-      if (t.kind === "mock" && q.answer != null) text += `這題的正確答案是 (${LETTERS[q.answer]})${q.explanation ? `，解析：${q.explanation}` : ""}`;
+      if (t.kind === "mock" && q.answer != null) text += `這題的正確答案是 ${ansLetters(q.answer)}${q.explanation ? `，解析：${q.explanation}` : ""}`;
     }
     STAR.answers[m.qi] = text;
     if (PeiduLive.isOn()) PeiduLive.sendText("（這則不用回應，只是讓你知道：" + text + "）", false);
