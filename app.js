@@ -978,6 +978,12 @@
     // 營運智慧分析師初級 考科二（2026-10-29）：同樣沒有公開考古題，題目全部是學習指引章末練習題
     { id: "ops2", kind: "guide", name: "營運科目二星圖", sub: "營運智慧分析師初級・考科二 經營管理數位化概論", subject: "iPAS「營運智慧分析師初級」的考科二（經營管理數位化概論）",
       url: LOCAL ? `${location.origin}/_star/ops2/?embed=1` : "https://amy610731.github.io/l23-map/ops2/?embed=1" },
+    // 品牌企劃師初級 科目一、二（2026-11-27；來源 E:\小胖\品牌星圖\，看那裡的 PLAN.md）：沒有考古題，題目＝官方公布樣題（114、115 年）
+    // ＋每個只有 1 題樣題的考點補 1 題自編仿真題（source 寫「自編」）。kind:"sample" 讓老師講對出處
+    { id: "brand1", kind: "sample", name: "品牌科目一星圖", sub: "品牌企劃師初級・科目一 品牌管理概論", subject: "iPAS「品牌企劃師初級」的科目一（品牌管理概論）",
+      url: LOCAL ? `${location.origin}/_star/brand1/?embed=1` : "https://amy610731.github.io/l23-map/brand1/?embed=1" },
+    { id: "brand2", kind: "sample", name: "品牌科目二星圖", sub: "品牌企劃師初級・科目二 行銷企劃實務", subject: "iPAS「品牌企劃師初級」的科目二（行銷企劃實務）",
+      url: LOCAL ? `${location.origin}/_star/brand2/?embed=1` : "https://amy610731.github.io/l23-map/brand2/?embed=1" },
     // 考前大猜題（資安初級兩科各 50 題自編仿真題，2026-10-28）：一次一題，送來的是「畫面上這一題」
     { id: "mock", kind: "mock", name: "考前大猜題", sub: "資安初級・科目一＋二 各 50 題仿真卷", subject: "iPAS「資訊安全工程師初級」的考前仿真卷（科目一、科目二）",
       url: LOCAL ? `${location.origin}/_star/mock/?embed=1` : "https://amy610731.github.io/l23-map/mock/?embed=1" },
@@ -1205,6 +1211,9 @@
       if (t.mode === "exam") L.push("【她正在用「考試模式」寫，交卷前畫面不會顯示答案。她作答或問你時，不要說對錯、不要講答案或暗示，只能幫她把題意、名詞講清楚；等她交卷（會收到她的作答結果）才講解。】");
     } else if (S.star && S.star.intro) {  // 急救表：一列一個重點，沒有逐題出處
       L.push(t.examHits ? `114-2、115-1 兩次公告試題合計考過 ${t.examHits} 題` : "這一列是公式或程式碼寫法的整理");
+    } else if (S.star && S.star.kind === "sample") {
+      const n = t.quiz.filter(q => q.source !== "自編").length;
+      L.push(`這一科沒有公開的考古題，練習題來自官方公布的能力鑑定樣題（這個考點有 ${n} 題官方樣題` + (t.quiz.length > n ? `，另有 ${t.quiz.length - n} 題出處寫「自編」的仿真補充題，不是官方題` : "") + `）；官方樣題的答案以官方公布的為準。`);
     } else if (S.star && S.star.kind === "guide") L.push(`這一科沒有公開的考古題，練習題全部來自官方學習指引的章末練習題（這個考點有 ${t.quiz.length} 題）；答案以指引公布的為準。`);
     else L.push(t.examHits ? `官方公告試題考過 ${t.examHits} 次（${(t.examRefs || []).join("、")}）` : "官方公告試題還沒考過這個考點");
     if (t.summary) L.push(`白話說明：${t.summary}`);
